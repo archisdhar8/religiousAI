@@ -1,0 +1,41 @@
+# Generated vectorstore - rebuild with: python build_index.py
+vectorstore/
+religiousAI/vectorstore/
+
+# Virtual environment
+venv/
+religiousAI/venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Downloaded scriptures (large files, users download themselves)
+# Uncomment if you don't want to track scripture files:
+# religiousAI/data/raw/*.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
