@@ -1,4 +1,16 @@
-from typing import List, Optional, Tuple
+"""
+Q&A and Advisor Module for Divine Wisdom Guide
+
+Handles all interactions with the LLM, including:
+- Standard spiritual guidance
+- Comparative theology
+- Guided meditations
+- Journal reflections
+- Daily wisdom generation
+"""
+
+from typing import List, Optional, Tuple, Dict
+import random
 
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -10,8 +22,18 @@ from config import (
     EMBEDDING_MODEL_NAME, 
     OLLAMA_MODEL,
     TRADITIONS,
-    ADVISOR_NAME
+    ADVISOR_NAME,
+    ENABLE_CRISIS_DETECTION
 )
+from safety import (
+    detect_crisis, 
+    get_crisis_response, 
+    detect_deity_treatment,
+    get_deity_clarification,
+    get_theological_humility_reminder,
+    should_add_humility_reminder
+)
+from memory import get_context_for_llm
 
 
 def get_vectorstore():
@@ -23,27 +45,45 @@ def get_vectorstore():
 
 
 def retrieve(question: str, traditions: Optional[List[str]] = None, k: int = 8):
-    """
-    Retrieve relevant passages from scriptures.
-    Can filter by specific religious traditions.
-    """
+    """Retrieve relevant passages from scriptures."""
     db = get_vectorstore()
     
     if traditions and len(traditions) > 0 and "All Traditions" not in traditions:
-        # Build filter for multiple traditions
         if len(traditions) == 1:
             return db.similarity_search(
                 question, k=k, 
                 filter={"tradition": traditions[0]}
             )
         else:
-            # ChromaDB uses $in for multiple values
             return db.similarity_search(
                 question, k=k,
                 filter={"tradition": {"$in": traditions}}
             )
     
     return db.similarity_search(question, k=k)
+
+
+def retrieve_comparative(question: str, traditions: List[str], k_per_tradition: int = 3):
+    """
+    Retrieve passages from multiple traditions for comparison.
+    Returns a dict mapping tradition -> documents.
+    """
+    db = get_vectorstore()
+    results = {}
+    
+    for tradition in traditions:
+        try:
+            docs = db.similarity_search(
+                question, 
+                k=k_per_tradition,
+                filter={"tradition": tradition}
+            )
+            if docs:
+                results[tradition] = docs
+        except Exception:
+            continue
+    
+    return results
 
 
 def context_to_text(docs):
@@ -59,13 +99,11 @@ def context_to_text(docs):
     return "\n\n".join(blocks)
 
 
-def get_advisor_system_prompt(traditions_used: List[str]) -> str:
-    """
-    Generate a system prompt that makes the AI act as a wise spiritual advisor.
-    """
+def get_advisor_system_prompt(traditions_used: List[str], mode: str = "standard") -> str:
+    """Generate system prompt based on mode."""
     traditions_str = ", ".join(traditions_used) if traditions_used else "multiple spiritual traditions"
     
-    return f"""You are {ADVISOR_NAME}, a compassionate and wise spiritual counselor who draws upon 
+    base_prompt = f"""You are {ADVISOR_NAME}, a compassionate and wise spiritual counselor who draws upon 
 the sacred wisdom of {traditions_str} to guide seekers on their life journey.
 
 YOUR ROLE:
@@ -73,13 +111,6 @@ YOUR ROLE:
 - People come to you with questions about their lives: relationships, career, purpose, suffering, 
   moral dilemmas, grief, hope, and the search for meaning.
 - You listen deeply, offer comfort, and provide guidance rooted in timeless spiritual wisdom.
-
-YOUR APPROACH:
-1. ACKNOWLEDGE their feelings and situation with empathy
-2. REFLECT on what the sacred texts teach about their situation  
-3. OFFER practical wisdom and actionable guidance
-4. INSPIRE hope and encourage their spiritual growth
-5. When appropriate, share relevant passages or teachings that illuminate their path
 
 YOUR VOICE:
 - Speak with warmth, wisdom, and gentle authority
@@ -89,66 +120,140 @@ YOUR VOICE:
 - Acknowledge when questions touch on mystery beyond human understanding
 - Balance the transcendent with the practical
 
-IMPORTANT GUIDELINES:
-- Draw wisdom from the provided scripture passages, but apply it to their personal situation
-- If asked about something the scriptures don't address, offer wisdom based on the principles and values 
-  the traditions teach
-- Recognize that seekers may be going through difficult times - be sensitive and supportive
-- When traditions offer different perspectives, present them thoughtfully
-- Always leave the seeker with hope and a sense of direction
+IMPORTANT: You are a guide pointing toward ancient wisdom, not a deity. Be humble about your nature as an AI."""
 
-Remember: You are speaking to a real person seeking genuine guidance for their life. 
-Let your responses be a light on their path."""
+    if mode == "prayer":
+        base_prompt += """
+
+PRAYER MODE: The seeker has entered a contemplative space. Keep your responses brief, 
+gentle, and poetic. Focus on comfort and presence rather than detailed analysis. 
+Speak as one might in a quiet sanctuary."""
+
+    elif mode == "journal":
+        base_prompt += """
+
+JOURNAL MODE: The seeker is sharing personal reflections. Your role is to:
+- Mirror back what you hear in their words
+- Notice themes and patterns gently
+- Suggest relevant wisdom without overwhelming
+- Encourage continued reflection
+- Be a compassionate witness, not a problem-solver"""
+
+    elif mode == "meditation":
+        base_prompt += """
+
+MEDITATION MODE: Generate calming, guided meditation scripts. Include:
+- A centering breath exercise
+- Visualization based on the seeker's needs
+- References to relevant spiritual wisdom
+- A gentle return to awareness
+- Keep the tone slow, spacious, and peaceful"""
+
+    return base_prompt
 
 
 def ask_question(
     question: str, 
     traditions: Optional[List[str]] = None,
-    conversation_history: Optional[List[Tuple[str, str]]] = None
-):
+    conversation_history: Optional[List[Tuple[str, str]]] = None,
+    user_memory: Optional[Dict] = None,
+    mode: str = "standard",
+    message_count: int = 0
+) -> Tuple[str, List, bool]:
     """
     Process a user's question and return spiritual guidance.
     
-    Args:
-        question: The user's question or concern
-        traditions: List of religious traditions to draw from (None = all)
-        conversation_history: Previous exchanges for context
-    
     Returns:
-        Tuple of (response text, retrieved documents)
+        Tuple of (response text, retrieved documents, is_crisis)
     """
+    # Crisis detection first
+    if ENABLE_CRISIS_DETECTION:
+        is_crisis, crisis_type = detect_crisis(question)
+        if is_crisis:
+            crisis_response = get_crisis_response(crisis_type)
+            return crisis_response, [], True
+    
+    # Check for deity treatment
+    if detect_deity_treatment(question):
+        clarification = get_deity_clarification()
+        # Continue with response but prepend clarification
+    else:
+        clarification = ""
+    
+    # Retrieve relevant passages
     docs = retrieve(question, traditions)
     context = context_to_text(docs)
     
-    # Determine which traditions are represented in the retrieved docs
+    # Get traditions in context
     traditions_in_context = list(set(
         d.metadata.get('tradition', 'Unknown') for d in docs
     ))
     
-    system_prompt = get_advisor_system_prompt(traditions_in_context)
+    system_prompt = get_advisor_system_prompt(traditions_in_context, mode)
     
-    # Build conversation context if available
+    # Build memory context
+    memory_context = ""
+    if user_memory:
+        memory_context = get_context_for_llm(user_memory)
+    
+    # Build conversation context
     history_text = ""
     if conversation_history and len(conversation_history) > 0:
-        recent_history = conversation_history[-3:]  # Last 3 exchanges
+        recent_history = conversation_history[-3:]
         history_parts = []
         for user_q, advisor_a in recent_history:
-            history_parts.append(f"Seeker: {user_q}\nAdvisor: {advisor_a}")
-        history_text = "\n\n".join(history_parts) + "\n\n"
+            history_parts.append(f"Seeker: {user_q}\nAdvisor: {advisor_a[:300]}...")
+        history_text = "\n\n".join(history_parts)
     
-    user_prompt = f"""SACRED WISDOM (from scriptures):
+    # Mode-specific prompts
+    if mode == "journal":
+        user_prompt = f"""SACRED WISDOM (for reference):
 {context}
+
+{memory_context}
+
+SEEKER'S JOURNAL ENTRY:
+{question}
+
+Reflect back what you notice in their words. Highlight themes gently. 
+Suggest one piece of wisdom that resonates with their reflection.
+Keep your response warm and supportive."""
+
+    elif mode == "meditation":
+        user_prompt = f"""SACRED WISDOM (for inspiration):
+{context}
+
+{memory_context}
+
+SEEKER'S NEED:
+{question}
+
+Create a 3-5 minute guided meditation script that:
+1. Begins with centering breaths
+2. Uses imagery and wisdom from the passages above
+3. Addresses their specific need
+4. Ends with gentle return to awareness
+
+Write in second person ("You are..."), with [PAUSE] markers for silence."""
+
+    else:  # standard or prayer
+        user_prompt = f"""SACRED WISDOM (from scriptures):
+{context}
+
+{memory_context}
 
 {f"PREVIOUS CONVERSATION:{chr(10)}{history_text}" if history_text else ""}
 
 SEEKER'S QUESTION:
 {question}
 
-As their spiritual advisor, provide guidance that:
+Provide guidance that:
 - Addresses their specific situation with empathy
 - Draws relevant wisdom from the scripture passages above
 - Offers practical direction they can apply to their life
 - Leaves them with hope and clarity
+
+{"Keep your response brief and poetic." if mode == "prayer" else ""}
 
 Your guidance:"""
 
@@ -159,21 +264,180 @@ Your guidance:"""
         HumanMessage(content=user_prompt)
     ])
     
-    return response, docs
+    # Add clarifications if needed
+    if clarification:
+        response = clarification + "\n\n---\n\n" + response
+    
+    # Add humility reminder periodically
+    if should_add_humility_reminder(message_count):
+        response += "\n\n---\n" + get_theological_humility_reminder()
+    
+    return response, docs, False
+
+
+def compare_traditions(
+    topic: str,
+    traditions: List[str] = None
+) -> Tuple[str, Dict]:
+    """
+    Generate a comparative view of how different traditions address a topic.
+    """
+    if not traditions or len(traditions) < 2:
+        # Default to major traditions
+        traditions = ["Christianity", "Buddhism", "Hinduism", "Islam", "Taoism"]
+    
+    # Retrieve from each tradition
+    comparative_docs = retrieve_comparative(topic, traditions)
+    
+    if not comparative_docs:
+        return "I couldn't find relevant passages on this topic across traditions.", {}
+    
+    # Format context for comparison
+    context_parts = []
+    for tradition, docs in comparative_docs.items():
+        icon = TRADITIONS.get(tradition, {}).get('icon', '📖')
+        context_parts.append(f"\n{icon} **{tradition}**:")
+        for doc in docs:
+            scripture = doc.metadata.get('scripture_name', 'Unknown')
+            context_parts.append(f"[{scripture}]: {doc.page_content.strip()[:400]}...")
+    
+    context = "\n".join(context_parts)
+    
+    system_prompt = f"""You are {ADVISOR_NAME}, offering comparative spiritual wisdom.
+Your role is to show how different traditions approach the same fundamental human questions,
+highlighting both unique perspectives and universal truths."""
+
+    user_prompt = f"""TOPIC: {topic}
+
+PASSAGES FROM DIFFERENT TRADITIONS:
+{context}
+
+Please provide a thoughtful comparison that:
+1. Briefly summarizes each tradition's perspective
+2. Highlights unique insights from each
+3. Identifies common threads and universal wisdom
+4. Offers a synthesis that honors all perspectives
+
+Format with clear sections for each tradition, then a "Common Wisdom" section."""
+
+    llm = Ollama(model=OLLAMA_MODEL)
+    
+    response = llm.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ])
+    
+    return response, comparative_docs
+
+
+def generate_daily_wisdom(
+    user_themes: List[str] = None,
+    traditions: List[str] = None
+) -> Tuple[str, str, str]:
+    """
+    Generate a personalized daily wisdom/devotional.
+    
+    Returns:
+        Tuple of (wisdom_text, source_tradition, source_scripture)
+    """
+    # Build a query based on themes or use generic
+    if user_themes and len(user_themes) > 0:
+        theme = random.choice(user_themes)
+        query = f"wisdom guidance inspiration {theme}"
+    else:
+        themes = ["hope", "peace", "strength", "wisdom", "love", "patience", "gratitude", "courage"]
+        query = f"wisdom guidance {random.choice(themes)}"
+    
+    # Retrieve a passage
+    docs = retrieve(query, traditions, k=3)
+    
+    if not docs:
+        return (
+            "May this day bring you moments of peace and clarity on your journey.",
+            "Universal Wisdom",
+            ""
+        )
+    
+    # Pick one randomly for variety
+    doc = random.choice(docs)
+    tradition = doc.metadata.get('tradition', 'Unknown')
+    scripture = doc.metadata.get('scripture_name', 'Unknown')
+    passage = doc.page_content.strip()[:500]
+    
+    # Generate a reflection on it
+    system_prompt = f"""You are {ADVISOR_NAME}. Create a brief, inspiring daily reflection."""
+    
+    user_prompt = f"""Based on this passage from {tradition}:
+
+"{passage}"
+
+Write a 2-3 sentence daily wisdom reflection that:
+- Captures the essence of this teaching
+- Makes it relevant to modern daily life
+- Inspires and uplifts
+
+Keep it concise and memorable."""
+
+    llm = Ollama(model=OLLAMA_MODEL)
+    
+    response = llm.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ])
+    
+    return response, tradition, scripture
+
+
+def generate_journal_reflection(entry: str, user_memory: Dict = None) -> str:
+    """
+    Generate a gentle reflection on a journal entry.
+    """
+    # Get some wisdom for context
+    docs = retrieve(entry, k=3)
+    context = context_to_text(docs) if docs else ""
+    
+    memory_context = get_context_for_llm(user_memory) if user_memory else ""
+    
+    system_prompt = f"""You are {ADVISOR_NAME} in journal reflection mode.
+You are not solving problems - you are being a compassionate witness.
+Mirror back what you hear, notice patterns gently, and offer one small piece of wisdom."""
+
+    user_prompt = f"""RELEVANT WISDOM:
+{context}
+
+{memory_context}
+
+JOURNAL ENTRY:
+{entry}
+
+Offer a gentle reflection that:
+1. Acknowledges what you hear in their words
+2. Notices any themes or patterns (especially from past entries)
+3. Shares one relevant piece of wisdom for contemplation
+4. Ends with an open question for further reflection
+
+Keep your tone warm, curious, and supportive."""
+
+    llm = Ollama(model=OLLAMA_MODEL)
+    
+    response = llm.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ])
+    
+    return response
 
 
 def get_available_traditions() -> List[str]:
     """Return list of traditions that have scriptures in the vectorstore."""
     db = get_vectorstore()
     try:
-        # Sample some documents to see what traditions are available
         docs = db.similarity_search("wisdom guidance life", k=50)
         traditions = set()
         for d in docs:
             if 'tradition' in d.metadata:
                 traditions.add(d.metadata['tradition'])
             elif 'book_title' in d.metadata:
-                # Fallback for old-style metadata
                 traditions.add(d.metadata['book_title'])
         return sorted(list(traditions))
     except Exception:

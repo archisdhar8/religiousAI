@@ -1,7 +1,24 @@
+# Core LangChain
 langchain
 langchain-community
 langchain-core
+
+# Vector store
 chromadb
+
+# Embeddings
 sentence-transformers
-streamlit
 huggingface-hub
+
+# Web UI
+streamlit
+
+# Voice Integration (optional - install if using voice features)
+# openai-whisper      # For speech-to-text
+# TTS                 # For text-to-speech (Coqui TTS)
+# pyttsx3             # Alternative TTS (simpler, offline)
+
+# Audio processing (for voice features)
+# sounddevice
+# soundfile
+# numpy

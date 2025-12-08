@@ -1,0 +1,26 @@
+{
+  "user_id": "1758cdcc8b84",
+  "created_at": "2025-12-06T18:40:48.678222",
+  "last_visit": "2025-12-06T18:45:25.189184",
+  "visit_count": 1,
+  "conversations": [
+    {
+      "date": "2025-12-06",
+      "exchanges": [
+        {
+          "timestamp": "2025-12-06T18:45:05.995509",
+          "question": "i committed a sin. what do i. do",
+          "answer": "Dear one, I sense the weight of guilt and shame upon your heart. It's as if you're carrying a heavy burden, feeling trapped in a prison of regret. Please know that you are not alone in this struggle.\n\nFirstly, acknowledge that acknowledging our mistakes is a crucial step towards healing. Just like the biblical passage from Leviticus 5:5-7 encourages confessing one's sin and making amends, it's essential to take ownership of your actions. Recognize that you've made a mistake, but don't let it def",
+          "traditions": []
+        }
+      ]
+    }
+  ],
+  "themes": [],
+  "journal_entries": [],
+  "preferences": {
+    "traditions": [],
+    "ui_mode": "standard",
+    "ambient_sound": "Silence"
+  }
+}
