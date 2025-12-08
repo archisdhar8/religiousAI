@@ -13,6 +13,11 @@ huggingface-hub
 # Web UI
 streamlit
 
+# API Server
+fastapi
+uvicorn[standard]
+pydantic
+
 # Voice Integration (optional - install if using voice features)
 # openai-whisper      # For speech-to-text
 # TTS                 # For text-to-speech (Coqui TTS)

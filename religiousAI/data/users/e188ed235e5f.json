@@ -1,0 +1,26 @@
+{
+  "user_id": "e188ed235e5f",
+  "created_at": "2025-12-07T19:16:29.994621",
+  "last_visit": "2025-12-07T19:20:27.869752",
+  "visit_count": 1,
+  "conversations": [
+    {
+      "date": "2025-12-07",
+      "exchanges": [
+        {
+          "timestamp": "2025-12-07T19:20:18.516625",
+          "question": "i need to vent",
+          "answer": "Dear one, I sense the weight of your heart's turmoil. Like a stormy sea, emotions swirl within you, seeking release. Remember, it is in these moments that we must allow ourselves to be still, like the quiet raindrops on a tranquil night. \n\nFrom the passages above, let us draw wisdom: just as Sir Toby and Fabian sought to \"pursue\" Sir Andrew, allowing his madness to unfold, so too can we learn to confront our own inner turmoil, rather than repressing it.\n\nMay Cardinal Wolsey's words guide you: \"Y",
+          "traditions": []
+        }
+      ]
+    }
+  ],
+  "themes": [],
+  "journal_entries": [],
+  "preferences": {
+    "traditions": [],
+    "ui_mode": "standard",
+    "ambient_sound": "Silence"
+  }
+}
