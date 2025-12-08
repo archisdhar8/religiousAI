@@ -1,0 +1,215 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+@layer base {
+  :root {
+    --background: 40 30% 96%;
+    --foreground: 220 30% 15%;
+
+    --card: 40 25% 98%;
+    --card-foreground: 220 30% 15%;
+
+    --popover: 40 25% 98%;
+    --popover-foreground: 220 30% 15%;
+
+    --primary: 220 60% 25%;
+    --primary-foreground: 40 30% 96%;
+
+    --secondary: 40 50% 90%;
+    --secondary-foreground: 220 30% 20%;
+
+    --muted: 40 20% 92%;
+    --muted-foreground: 220 15% 45%;
+
+    --accent: 42 85% 55%;
+    --accent-foreground: 220 30% 15%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 40 25% 85%;
+    --input: 40 25% 85%;
+    --ring: 220 60% 25%;
+
+    --radius: 0.75rem;
+
+    /* Custom spiritual colors */
+    --celestial: 220 45% 20%;
+    --celestial-light: 220 50% 35%;
+    --gold: 42 85% 55%;
+    --gold-soft: 42 70% 70%;
+    --ivory: 40 30% 96%;
+    --divine-glow: 42 100% 75%;
+
+    /* Gradients */
+    --gradient-celestial: linear-gradient(135deg, hsl(220 45% 20%) 0%, hsl(240 40% 15%) 100%);
+    --gradient-gold: linear-gradient(135deg, hsl(42 85% 55%) 0%, hsl(35 90% 60%) 100%);
+    --gradient-divine: linear-gradient(180deg, hsl(40 30% 96%) 0%, hsl(40 35% 92%) 100%);
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 220 30% 8%;
+    --foreground: 40 30% 95%;
+
+    --card: 220 30% 12%;
+    --card-foreground: 40 30% 95%;
+
+    --popover: 220 30% 12%;
+    --popover-foreground: 40 30% 95%;
+
+    --primary: 42 85% 55%;
+    --primary-foreground: 220 30% 10%;
+
+    --secondary: 220 25% 18%;
+    --secondary-foreground: 40 30% 90%;
+
+    --muted: 220 20% 15%;
+    --muted-foreground: 40 20% 65%;
+
+    --accent: 42 70% 50%;
+    --accent-foreground: 220 30% 10%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 20% 20%;
+    --input: 220 20% 20%;
+    --ring: 42 85% 55%;
+
+    --celestial: 220 45% 85%;
+    --celestial-light: 220 50% 70%;
+    --gold: 42 85% 55%;
+    --gold-soft: 42 60% 45%;
+    --ivory: 220 30% 12%;
+    --divine-glow: 42 80% 40%;
+
+    --gradient-celestial: linear-gradient(135deg, hsl(220 35% 15%) 0%, hsl(240 30% 10%) 100%);
+    --gradient-gold: linear-gradient(135deg, hsl(42 75% 50%) 0%, hsl(35 80% 55%) 100%);
+    --gradient-divine: linear-gradient(180deg, hsl(220 30% 8%) 0%, hsl(220 30% 12%) 100%);
+
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Cormorant Garamond', serif;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: 'Cormorant Garamond', serif;
+  }
+
+  .font-body {
+    font-family: 'Inter', sans-serif;
+  }
+
+  .text-gradient-gold {
+    background: var(--gradient-gold);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .bg-celestial {
+    background: var(--gradient-celestial);
+  }
+
+  .bg-divine {
+    background: var(--gradient-divine);
+  }
+
+  .glow-gold {
+    box-shadow: 0 0 30px hsl(var(--divine-glow) / 0.3);
+  }
+
+  .glow-gold-subtle {
+    box-shadow: 0 0 20px hsl(var(--divine-glow) / 0.15);
+  }
+}
+
+/* Floating particles animation */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0) translateX(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-100vh) translateX(20px);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes typing {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-float {
+  animation: float 15s ease-in-out infinite;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 3s ease-in-out infinite;
+}
+
+.animate-typing-1 {
+  animation: typing 1.4s ease-in-out infinite;
+}
+
+.animate-typing-2 {
+  animation: typing 1.4s ease-in-out infinite 0.2s;
+}
+
+.animate-typing-3 {
+  animation: typing 1.4s ease-in-out infinite 0.4s;
+}
