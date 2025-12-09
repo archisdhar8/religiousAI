@@ -12,10 +12,12 @@ import uuid
 
 from qa import (
     ask_question,
+    ask_question_multi_agent,
     get_available_traditions,
     compare_traditions,
     generate_daily_wisdom,
-    generate_journal_reflection
+    generate_journal_reflection,
+    MULTI_AGENT_AVAILABLE
 )
 from memory import (
     get_user_id,
@@ -58,12 +60,14 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     conversation_history: Optional[List[Dict[str, str]]] = None
     mode: str = "standard"
+    use_multi_agent: bool = False  # Enable multi-agent system
 
 
 class ChatResponse(BaseModel):
     response: str
     is_crisis: bool
     sources: Optional[List[Dict]] = None
+    agent_outputs: Optional[Dict[str, str]] = None  # Individual agent responses (for transparency)
 
 
 class DailyWisdomResponse(BaseModel):
@@ -100,10 +104,90 @@ def get_tradition_from_religion(religion_id: Optional[str]) -> Optional[List[str
     return None
 
 
+def detect_comparison_request(message: str) -> tuple[bool, Optional[str], Optional[List[str]]]:
+    """
+    Detect if user is asking for a cross-religious comparison.
+    
+    Returns:
+        (is_comparison, topic, traditions_to_compare)
+    """
+    message_lower = message.lower()
+    
+    # Patterns that indicate comparison requests
+    comparison_patterns = [
+        "compare",
+        "what does christianity say" and "what about",
+        "what does islam say" and "what about", 
+        "what does buddhism say" and "what about",
+        "how do different",
+        "different religions",
+        "different faiths",
+        "across traditions",
+        "across religions",
+        "various religions",
+        "multiple faiths",
+    ]
+    
+    is_comparison = any(pattern in message_lower for pattern in comparison_patterns)
+    
+    # Also check for pattern: "What does X say about Y? What about Z?"
+    if "what does" in message_lower and "what about" in message_lower:
+        is_comparison = True
+    
+    if not is_comparison:
+        return False, None, None
+    
+    # Extract which traditions are mentioned
+    mentioned_traditions = []
+    tradition_keywords = {
+        "christianity": "Christianity", "christian": "Christianity", "bible": "Christianity",
+        "islam": "Islam", "muslim": "Islam", "quran": "Islam",
+        "buddhism": "Buddhism", "buddhist": "Buddhism", "buddha": "Buddhism",
+        "hinduism": "Hinduism", "hindu": "Hinduism", "gita": "Hinduism",
+        "judaism": "Judaism", "jewish": "Judaism", "torah": "Judaism",
+        "taoism": "Taoism", "taoist": "Taoism", "tao": "Taoism",
+        "sikhism": "Sikhism", "sikh": "Sikhism",
+        "stoicism": "Stoicism", "stoic": "Stoicism",
+        "confucianism": "Confucianism", "confucian": "Confucianism",
+    }
+    
+    for keyword, tradition in tradition_keywords.items():
+        if keyword in message_lower and tradition not in mentioned_traditions:
+            mentioned_traditions.append(tradition)
+    
+    # If no specific traditions mentioned, use defaults
+    if len(mentioned_traditions) < 2:
+        mentioned_traditions = ["Christianity", "Islam", "Buddhism", "Hinduism"]
+    
+    # Extract topic (simplified - take the main subject)
+    # Remove comparison words to get the topic
+    topic = message
+    for word in ["compare", "what does", "say about", "what about", "how do", "different religions", "view"]:
+        topic = topic.lower().replace(word, "")
+    topic = topic.strip().strip("?").strip()
+    
+    # If topic is too short, use the original message
+    if len(topic) < 3:
+        topic = message
+    
+    return True, topic, mentioned_traditions
+
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
-    return {"message": "Divine Wisdom Guide API", "status": "running"}
+    return {
+        "message": "Divine Wisdom Guide API", 
+        "status": "running",
+        "multi_agent_available": MULTI_AGENT_AVAILABLE,
+        "features": [
+            "chat",
+            "multi-agent-chat",
+            "compare-religions",
+            "daily-wisdom",
+            "journal"
+        ]
+    }
 
 
 @app.get("/api/traditions", response_model=TraditionsResponse)
@@ -123,8 +207,45 @@ async def get_traditions():
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process a chat message and return spiritual guidance."""
+    """Process a chat message and return spiritual guidance.
+    
+    Features:
+    - Auto-detects cross-religious comparison requests
+    - Set use_multi_agent=True for the 4-agent system
+    
+    Multi-agent system uses:
+    - Compassion Agent (emotional grounding)
+    - Scripture Agent (accurate citations)
+    - Scholar Agent (theological interpretation)
+    - Guidance Agent (practical advice)
+    """
     try:
+        # Check if this is a comparison request
+        is_comparison, topic, compare_traditions_list = detect_comparison_request(request.message)
+        
+        if is_comparison and compare_traditions_list:
+            # Route to comparison logic
+            comparison_result, docs = compare_traditions(topic, compare_traditions_list)
+            
+            # Format sources from comparison
+            sources = []
+            if isinstance(docs, dict):
+                for tradition, tradition_docs in docs.items():
+                    for doc in tradition_docs:
+                        sources.append({
+                            "tradition": tradition,
+                            "scripture": doc.metadata.get("scripture_name", "Unknown"),
+                            "content": doc.page_content[:300] + "..."
+                        })
+            
+            return ChatResponse(
+                response=comparison_result,
+                is_crisis=False,
+                sources=sources,
+                agent_outputs={"mode": "cross-religious-comparison", "traditions": compare_traditions_list}
+            )
+        
+        # Regular chat flow
         # Get user memory
         session_id = request.session_id or str(uuid.uuid4())
         user_id = get_user_id(session_id)
@@ -148,15 +269,28 @@ async def chat(request: ChatRequest):
             for conv in user_memory.get("conversations", [])
         )
         
-        # Ask question
-        response_text, docs, is_crisis = ask_question(
-            question=request.message,
-            traditions=traditions,
-            conversation_history=conversation_history,
-            user_memory=user_memory,
-            mode=request.mode,
-            message_count=message_count
-        )
+        # Choose single-agent or multi-agent based on request
+        agent_outputs = None
+        
+        if request.use_multi_agent and MULTI_AGENT_AVAILABLE:
+            # Use multi-agent system (4 specialized agents)
+            response_text, docs, is_crisis, agent_outputs = ask_question_multi_agent(
+                question=request.message,
+                traditions=traditions,
+                conversation_history=conversation_history,
+                user_memory=user_memory,
+                message_count=message_count
+            )
+        else:
+            # Use standard single-agent
+            response_text, docs, is_crisis = ask_question(
+                question=request.message,
+                traditions=traditions,
+                conversation_history=conversation_history,
+                user_memory=user_memory,
+                mode=request.mode,
+                message_count=message_count
+            )
         
         # Format sources
         sources = None
@@ -183,7 +317,8 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             response=response_text,
             is_crisis=is_crisis,
-            sources=sources
+            sources=sources,
+            agent_outputs=agent_outputs
         )
     
     except Exception as e:
@@ -220,30 +355,58 @@ async def daily_wisdom(session_id: Optional[str] = None, religion: Optional[str]
 
 @app.post("/api/compare")
 async def compare(request: CompareRequest):
-    """Compare how different traditions approach a topic."""
+    """
+    Compare how different traditions approach a topic.
+    
+    Example request:
+    {
+        "topic": "forgiveness",
+        "traditions": ["Christianity", "Islam", "Buddhism"]
+    }
+    
+    Returns a respectful comparison with cited scriptures from each tradition.
+    """
     try:
-        # Ensure tradition names are correct
-        valid_traditions = [t for t in request.traditions if t in TRADITIONS]
+        # Ensure tradition names are correct (case-insensitive matching)
+        valid_traditions = []
+        for t in request.traditions:
+            # Try exact match first
+            if t in TRADITIONS:
+                valid_traditions.append(t)
+            else:
+                # Try case-insensitive match
+                for tradition_name in TRADITIONS.keys():
+                    if tradition_name.lower() == t.lower():
+                        valid_traditions.append(tradition_name)
+                        break
+        
         if len(valid_traditions) < 2:
+            available = list(TRADITIONS.keys())
             raise HTTPException(
                 status_code=400,
-                detail="Please provide at least 2 valid traditions to compare"
+                detail=f"Please provide at least 2 valid traditions. Available: {available}"
             )
         
         comparison, docs = compare_traditions(request.topic, valid_traditions)
         
-        # Format sources
+        # Format sources by tradition
         sources = {}
         for tradition, tradition_docs in docs.items():
-            sources[tradition] = [
-                {
-                    "scripture": doc.metadata.get("scripture_name", "Unknown"),
-                    "content": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
-                }
-                for doc in tradition_docs
-            ]
+            icon = TRADITIONS.get(tradition, {}).get("icon", "📖")
+            sources[tradition] = {
+                "icon": icon,
+                "passages": [
+                    {
+                        "scripture": doc.metadata.get("scripture_name", "Unknown"),
+                        "content": doc.page_content[:400] + "..." if len(doc.page_content) > 400 else doc.page_content
+                    }
+                    for doc in tradition_docs
+                ]
+            }
         
         return {
+            "topic": request.topic,
+            "traditions_compared": valid_traditions,
             "comparison": comparison,
             "sources": sources
         }

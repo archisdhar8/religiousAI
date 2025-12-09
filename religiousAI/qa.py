@@ -2,7 +2,8 @@
 Q&A and Advisor Module for Divine Wisdom Guide
 
 Handles all interactions with the LLM, including:
-- Standard spiritual guidance
+- Standard spiritual guidance (single LLM)
+- Multi-agent spiritual guidance (4 specialized agents)
 - Comparative theology
 - Guided meditations
 - Journal reflections
@@ -35,6 +36,13 @@ from safety import (
 )
 from memory import get_context_for_llm
 
+# Import multi-agent system
+try:
+    from agents import multi_agent_guidance, compare_religions_on_topic
+    MULTI_AGENT_AVAILABLE = True
+except ImportError:
+    MULTI_AGENT_AVAILABLE = False
+
 
 def get_vectorstore():
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
@@ -47,7 +55,7 @@ def get_vectorstore():
 def retrieve(question: str, traditions: Optional[List[str]] = None, k: int = 8):
     """Retrieve relevant passages from scriptures."""
     db = get_vectorstore()
-    
+
     if traditions and len(traditions) > 0 and "All Traditions" not in traditions:
         if len(traditions) == 1:
             return db.similarity_search(
@@ -59,7 +67,7 @@ def retrieve(question: str, traditions: Optional[List[str]] = None, k: int = 8):
                 question, k=k,
                 filter={"tradition": {"$in": traditions}}
             )
-    
+
     return db.similarity_search(question, k=k)
 
 
@@ -183,7 +191,7 @@ def ask_question(
     # Retrieve relevant passages
     docs = retrieve(question, traditions)
     context = context_to_text(docs)
-    
+
     # Get traditions in context
     traditions_in_context = list(set(
         d.metadata.get('tradition', 'Unknown') for d in docs
@@ -273,6 +281,72 @@ Your guidance:"""
         response += "\n\n---\n" + get_theological_humility_reminder()
     
     return response, docs, False
+
+
+def ask_question_multi_agent(
+    question: str, 
+    traditions: Optional[List[str]] = None,
+    conversation_history: Optional[List[Tuple[str, str]]] = None,
+    user_memory: Optional[Dict] = None,
+    message_count: int = 0
+) -> Tuple[str, List, bool, Optional[Dict]]:
+    """
+    Process a user's question using the MULTI-AGENT system.
+    
+    Uses 4 specialized agents:
+    - Compassion Agent: Emotional grounding
+    - Scripture Agent: Accurate citations
+    - Scholar Agent: Theological interpretation
+    - Guidance Agent: Practical advice
+    
+    Returns:
+        Tuple of (response text, retrieved documents, is_crisis, agent_outputs)
+    """
+    if not MULTI_AGENT_AVAILABLE:
+        # Fall back to regular single-agent
+        response, docs, is_crisis = ask_question(
+            question, traditions, conversation_history, user_memory, "standard", message_count
+        )
+        return response, docs, is_crisis, None
+    
+    # Crisis detection first
+    if ENABLE_CRISIS_DETECTION:
+        is_crisis, crisis_type = detect_crisis(question)
+        if is_crisis:
+            crisis_response = get_crisis_response(crisis_type)
+            return crisis_response, [], True, None
+    
+    # Check for deity treatment
+    clarification = ""
+    if detect_deity_treatment(question):
+        clarification = get_deity_clarification()
+    
+    # Retrieve relevant passages
+    docs = retrieve(question, traditions)
+    context = context_to_text(docs)
+    
+    # Build user context from memory
+    user_context = ""
+    if user_memory:
+        user_context = get_context_for_llm(user_memory)
+    
+    # Run multi-agent system
+    response, agent_outputs = multi_agent_guidance(
+        question=question,
+        scripture_context=context,
+        traditions=traditions,
+        user_context=user_context
+    )
+    
+    # Add clarifications if needed
+    if clarification:
+        response = clarification + "\n\n---\n\n" + response
+    
+    # Add humility reminder periodically
+    if should_add_humility_reminder(message_count):
+        response += "\n\n---\n" + get_theological_humility_reminder()
+    
+    return response, docs, False, agent_outputs
 
 
 def compare_traditions(
@@ -379,12 +453,12 @@ Write a 2-3 sentence daily wisdom reflection that:
 Keep it concise and memorable."""
 
     llm = Ollama(model=OLLAMA_MODEL)
-    
+
     response = llm.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt)
     ])
-    
+
     return response, tradition, scripture
 
 
