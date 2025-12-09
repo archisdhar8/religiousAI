@@ -1,0 +1,11 @@
+{
+  "email": "archisdhar@gmail.com",
+  "password_hash": "6e242e339a382e417093d4f769ecc435:17287b9fb5f31fc69974bcb12819f65bf7ac29e9eb14fa6820611f1f6e32e32a",
+  "name": "Archis Dhar",
+  "created_at": "2025-12-09T12:40:24.541302",
+  "last_login": null,
+  "preferences": {
+    "default_religion": "christianity",
+    "theme": "dark"
+  }
+}

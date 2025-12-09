@@ -4,13 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FloatingParticles } from "@/components/chat/FloatingParticles";
-import { Sparkles, Mail, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Sparkles, Mail, Lock, ArrowRight, Eye, EyeOff, User } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { signUp, login } from "@/lib/api";
 
 const Login = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
@@ -20,15 +22,43 @@ const Login = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Simulate authentication - replace with real auth later
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      if (isSignUp) {
+        // Sign up
+        const response = await signUp({
+          email,
+          password,
+          name: name || undefined,
+        });
+
+        if (response.success) {
+          toast({
+            title: "Account created!",
+            description: "Welcome to Divine Wisdom. Redirecting...",
+          });
+          navigate("/chat");
+        }
+      } else {
+        // Login
+        const response = await login({ email, password });
+
+        if (response.success) {
+          toast({
+            title: "Welcome back!",
+            description: "Redirecting to your divine conversation...",
+          });
+          navigate("/chat");
+        }
+      }
+    } catch (error) {
       toast({
-        title: isSignUp ? "Account created!" : "Welcome back!",
-        description: "Redirecting you to the divine chat...",
+        title: isSignUp ? "Sign up failed" : "Login failed",
+        description: error instanceof Error ? error.message : "Please try again",
+        variant: "destructive",
       });
-      navigate("/chat");
-    }, 1500);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -70,6 +100,26 @@ const Login = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
+              {/* Name field - only show on sign up */}
+              {isSignUp && (
+                <div className="space-y-2">
+                  <Label htmlFor="name" className="font-body">
+                    Name (optional)
+                  </Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                    <Input
+                      id="name"
+                      type="text"
+                      placeholder="Your name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="pl-10 bg-background/50 border-gold/30 focus:border-gold"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="email" className="font-body">
                   Email
@@ -102,6 +152,7 @@ const Login = () => {
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10 bg-background/50 border-gold/30 focus:border-gold"
                     required
+                    minLength={6}
                   />
                   <button
                     type="button"
@@ -115,6 +166,11 @@ const Login = () => {
                     )}
                   </button>
                 </div>
+                {isSignUp && (
+                  <p className="text-xs text-muted-foreground">
+                    Password must be at least 6 characters
+                  </p>
+                )}
               </div>
 
               <Button
@@ -142,7 +198,10 @@ const Login = () => {
               <p className="text-sm text-muted-foreground font-body">
                 {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
                 <button
-                  onClick={() => setIsSignUp(!isSignUp)}
+                  onClick={() => {
+                    setIsSignUp(!isSignUp);
+                    setName("");
+                  }}
                   className="text-gold hover:text-gold/80 font-medium transition-colors"
                 >
                   {isSignUp ? "Sign In" : "Sign Up"}

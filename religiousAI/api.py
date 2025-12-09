@@ -28,6 +28,25 @@ from memory import (
     get_returning_user_greeting
 )
 from config import TRADITIONS, ADVISOR_GREETING
+from auth import (
+    create_user,
+    authenticate_user,
+    create_session,
+    validate_session,
+    delete_session,
+    get_user_by_email,
+    update_user_preferences
+)
+from community import (
+    create_or_update_profile,
+    get_profile,
+    find_matches,
+    send_connection_request,
+    respond_to_request,
+    get_connections,
+    get_pending_requests,
+    extract_traits_from_themes
+)
 
 # Frontend religion IDs to backend tradition names mapping
 RELIGION_TO_TRADITION = {
@@ -88,6 +107,32 @@ class JournalRequest(BaseModel):
 
 class TraditionsResponse(BaseModel):
     traditions: List[Dict[str, str]]
+
+
+# Auth Models
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    success: bool
+    message: str
+    token: Optional[str] = None
+    user: Optional[Dict] = None
+
+
+class UserResponse(BaseModel):
+    email: str
+    name: str
+    created_at: str
+    preferences: Dict
 
 
 def get_tradition_from_religion(religion_id: Optional[str]) -> Optional[List[str]]:
@@ -474,3 +519,312 @@ async def get_greeting(session_id: Optional[str] = None):
     except Exception as e:
         return {"greeting": ADVISOR_GREETING}
 
+
+# =====================================================================
+# AUTHENTICATION ENDPOINTS
+# =====================================================================
+
+@app.post("/api/auth/signup", response_model=AuthResponse)
+async def signup(request: SignUpRequest):
+    """
+    Create a new user account.
+    """
+    success, message = create_user(
+        email=request.email,
+        password=request.password,
+        name=request.name
+    )
+    
+    if success:
+        # Auto-login after signup
+        token = create_session(request.email)
+        user = get_user_by_email(request.email)
+        return AuthResponse(
+            success=True,
+            message=message,
+            token=token,
+            user=user
+        )
+    else:
+        raise HTTPException(status_code=400, detail=message)
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    """
+    Login with email and password.
+    """
+    success, message, user = authenticate_user(
+        email=request.email,
+        password=request.password
+    )
+    
+    if success:
+        token = create_session(request.email)
+        return AuthResponse(
+            success=True,
+            message=message,
+            token=token,
+            user=user
+        )
+    else:
+        raise HTTPException(status_code=401, detail=message)
+
+
+@app.post("/api/auth/logout")
+async def logout(token: Optional[str] = None):
+    """
+    Logout and invalidate session.
+    """
+    if token:
+        delete_session(token)
+    return {"success": True, "message": "Logged out successfully"}
+
+
+@app.get("/api/auth/me")
+async def get_current_user(authorization: Optional[str] = None):
+    """
+    Get current user info from session token.
+    Pass token in Authorization header as 'Bearer <token>'
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Extract token from "Bearer <token>"
+    token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+    
+    is_valid, email = validate_session(token)
+    
+    if not is_valid or not email:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    user = get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return user
+
+
+@app.put("/api/auth/preferences")
+async def update_preferences(
+    preferences: Dict,
+    authorization: Optional[str] = None
+):
+    """
+    Update user preferences.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+    is_valid, email = validate_session(token)
+    
+    if not is_valid or not email:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    success = update_user_preferences(email, preferences)
+    if success:
+        return {"success": True, "message": "Preferences updated"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to update preferences")
+
+
+# =====================================================================
+# COMMUNITY ENDPOINTS
+# =====================================================================
+
+class CommunityProfileRequest(BaseModel):
+    display_name: str
+    bio: Optional[str] = None
+    preferred_traditions: Optional[List[str]] = None
+    opt_in: bool = True
+
+
+class ConnectionRequest(BaseModel):
+    to_email: str
+    message: Optional[str] = ""
+
+
+class ConnectionResponseRequest(BaseModel):
+    from_email: str
+    accept: bool
+
+
+def get_email_from_auth(authorization: Optional[str]) -> str:
+    """Helper to extract email from auth token."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+    is_valid, email = validate_session(token)
+    
+    if not is_valid or not email:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    return email
+
+
+@app.post("/api/community/profile")
+async def create_community_profile(
+    request: CommunityProfileRequest,
+    authorization: Optional[str] = None
+):
+    """
+    Create or update community profile for matching.
+    AI will analyze your conversations to find compatible spiritual companions.
+    """
+    email = get_email_from_auth(authorization)
+    
+    # Get user's conversation themes for trait extraction
+    user_id = get_user_id(email)
+    user_memory = load_user_memory(user_id)
+    
+    themes = user_memory.get("themes", [])
+    conversations = user_memory.get("conversations", [])
+    
+    # Extract traits from conversation history
+    traits = extract_traits_from_themes(themes, conversations)
+    
+    # Add preferred traditions to traits
+    if request.preferred_traditions:
+        traits["preferred_traditions"] = request.preferred_traditions
+    
+    profile = create_or_update_profile(
+        user_email=email,
+        display_name=request.display_name,
+        bio=request.bio,
+        traits=traits,
+        preferred_traditions=request.preferred_traditions,
+        opt_in=request.opt_in
+    )
+    
+    return {
+        "success": True,
+        "profile": {
+            "display_name": profile["display_name"],
+            "bio": profile["bio"],
+            "traits": profile["traits"],
+            "preferred_traditions": profile["preferred_traditions"],
+            "opt_in": profile["opt_in"]
+        }
+    }
+
+
+@app.get("/api/community/profile")
+async def get_community_profile(authorization: Optional[str] = None):
+    """Get current user's community profile."""
+    email = get_email_from_auth(authorization)
+    
+    profile = get_profile(email)
+    if not profile:
+        return {"profile": None}
+    
+    return {
+        "profile": {
+            "display_name": profile["display_name"],
+            "bio": profile.get("bio", ""),
+            "traits": profile.get("traits", {}),
+            "preferred_traditions": profile.get("preferred_traditions", []),
+            "opt_in": profile.get("opt_in", True),
+            "connections_count": len(profile.get("connections", [])),
+            "pending_requests": len(profile.get("connection_requests", []))
+        }
+    }
+
+
+@app.get("/api/community/matches")
+async def get_matches(
+    limit: int = 10,
+    authorization: Optional[str] = None
+):
+    """
+    Find compatible spiritual companions based on conversation themes,
+    struggles, and faith interests.
+    """
+    email = get_email_from_auth(authorization)
+    
+    profile = get_profile(email)
+    if not profile:
+        raise HTTPException(
+            status_code=400, 
+            detail="Please create a community profile first"
+        )
+    
+    if not profile.get("opt_in"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please opt-in to community matching in your profile"
+        )
+    
+    matches = find_matches(email, limit=limit)
+    
+    return {
+        "matches": matches,
+        "total": len(matches)
+    }
+
+
+@app.post("/api/community/connect")
+async def request_connection(
+    request: ConnectionRequest,
+    authorization: Optional[str] = None
+):
+    """Send a connection request to another user."""
+    email = get_email_from_auth(authorization)
+    
+    success, message = send_connection_request(
+        from_email=email,
+        to_email=request.to_email,
+        message=request.message or ""
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return {"success": True, "message": message}
+
+
+@app.post("/api/community/respond")
+async def respond_connection(
+    request: ConnectionResponseRequest,
+    authorization: Optional[str] = None
+):
+    """Accept or decline a connection request."""
+    email = get_email_from_auth(authorization)
+    
+    success, message = respond_to_request(
+        user_email=email,
+        from_email=request.from_email,
+        accept=request.accept
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return {"success": True, "message": message}
+
+
+@app.get("/api/community/connections")
+async def list_connections(authorization: Optional[str] = None):
+    """Get list of connected spiritual companions."""
+    email = get_email_from_auth(authorization)
+    
+    connections = get_connections(email)
+    
+    return {
+        "connections": connections,
+        "total": len(connections)
+    }
+
+
+@app.get("/api/community/requests")
+async def list_requests(authorization: Optional[str] = None):
+    """Get pending connection requests."""
+    email = get_email_from_auth(authorization)
+    
+    requests = get_pending_requests(email)
+    
+    return {
+        "requests": requests,
+        "total": len(requests)
+    }
