@@ -20,40 +20,103 @@ const Login = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log("Form submitted", { isSignUp, email, hasPassword: !!password, name });
+    
+    // Basic validation
+    if (!email.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Please enter your email address",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    if (!password.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Please enter your password",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    if (isSignUp && password.length < 6) {
+      toast({
+        title: "Validation Error",
+        description: "Password must be at least 6 characters",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    console.log("Validation passed, setting loading state");
     setIsLoading(true);
 
     try {
       if (isSignUp) {
         // Sign up
+        console.log("Attempting signup with:", { email: email.trim(), hasPassword: !!password, name: name.trim() || undefined });
         const response = await signUp({
-          email,
+          email: email.trim(),
           password,
-          name: name || undefined,
+          name: name.trim() || undefined,
         });
 
-        if (response.success) {
+        console.log("Signup response:", response);
+
+        if (response.success && response.token && response.user) {
           toast({
             title: "Account created!",
             description: "Welcome to Divine Wisdom. Redirecting...",
           });
-          navigate("/chat");
+          // Small delay to show toast before navigation
+          setTimeout(() => {
+            navigate("/");
+          }, 500);
+        } else {
+          console.error("Signup failed - missing required fields:", {
+            success: response.success,
+            hasToken: !!response.token,
+            hasUser: !!response.user,
+            message: response.message
+          });
+          toast({
+            title: "Sign up failed",
+            description: response.message || "Failed to create account. Please try again.",
+            variant: "destructive",
+          });
         }
       } else {
         // Login
-        const response = await login({ email, password });
+        const response = await login({ 
+          email: email.trim(), 
+          password 
+        });
 
-        if (response.success) {
+        if (response.success && response.token && response.user) {
           toast({
             title: "Welcome back!",
             description: "Redirecting to your divine conversation...",
           });
-          navigate("/chat");
+          // Small delay to show toast before navigation
+          setTimeout(() => {
+            navigate("/");
+          }, 500);
+        } else {
+          toast({
+            title: "Login failed",
+            description: response.message || "Invalid email or password. Please try again.",
+            variant: "destructive",
+          });
         }
       }
     } catch (error) {
+      console.error("Auth error:", error);
+      const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred. Please try again.";
       toast({
         title: isSignUp ? "Sign up failed" : "Login failed",
-        description: error instanceof Error ? error.message : "Please try again",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {

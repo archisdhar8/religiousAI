@@ -20,8 +20,14 @@ from config import OLLAMA_MODEL, TRADITIONS
 
 
 def get_llm():
-    """Get the LLM instance."""
-    return Ollama(model=OLLAMA_MODEL)
+    """Get an optimized LLM instance for faster responses."""
+    return Ollama(
+        model=OLLAMA_MODEL,
+        temperature=0.7,
+        num_predict=400,  # Shorter responses for agents (they get synthesized anyway)
+        top_p=0.9,
+        repeat_penalty=1.1,
+    )
 
 
 # =====================================================================

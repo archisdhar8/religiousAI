@@ -43,17 +43,47 @@ try:
 except ImportError:
     MULTI_AGENT_AVAILABLE = False
 
+# Cache vectorstore and embeddings to avoid reloading
+_vectorstore_cache = None
+_embeddings_cache = None
 
-def get_vectorstore():
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
-    return Chroma(
-        persist_directory=VECTORSTORE_DIR,
-        embedding_function=embeddings,
+
+def get_optimized_llm(max_tokens: int = 512):
+    """
+    Get an optimized Ollama LLM instance for faster responses.
+    
+    Args:
+        max_tokens: Maximum tokens to generate (default 512 for speed)
+    """
+    return Ollama(
+        model=OLLAMA_MODEL,
+        temperature=0.7,  # Lower temperature for faster, more focused responses
+        num_predict=max_tokens,  # Limit response length
+        top_p=0.9,  # Nucleus sampling for faster generation
+        repeat_penalty=1.1,  # Prevent repetition
     )
 
 
-def retrieve(question: str, traditions: Optional[List[str]] = None, k: int = 8):
-    """Retrieve relevant passages from scriptures."""
+def get_vectorstore():
+    """Get or create cached vectorstore instance."""
+    global _vectorstore_cache, _embeddings_cache
+    
+    if _vectorstore_cache is None:
+        if _embeddings_cache is None:
+            _embeddings_cache = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        _vectorstore_cache = Chroma(
+            persist_directory=VECTORSTORE_DIR,
+            embedding_function=_embeddings_cache,
+        )
+    
+    return _vectorstore_cache
+
+
+def retrieve(question: str, traditions: Optional[List[str]] = None, k: int = 6):
+    """
+    Retrieve relevant passages from scriptures.
+    Reduced default k from 8 to 6 for faster processing.
+    """
     db = get_vectorstore()
 
     if traditions and len(traditions) > 0 and "All Traditions" not in traditions:
@@ -94,15 +124,22 @@ def retrieve_comparative(question: str, traditions: List[str], k_per_tradition: 
     return results
 
 
-def context_to_text(docs):
-    """Format retrieved documents into context for the LLM."""
+def context_to_text(docs, max_chars_per_doc: int = 400):
+    """
+    Format retrieved documents into context for the LLM.
+    Truncate long documents to speed up processing.
+    """
     blocks = []
     for i, d in enumerate(docs, 1):
         tradition = d.metadata.get('tradition', 'Unknown')
         scripture = d.metadata.get('scripture_name', d.metadata.get('book_title', 'Unknown'))
+        content = d.page_content.strip()
+        # Truncate content if too long
+        if len(content) > max_chars_per_doc:
+            content = content[:max_chars_per_doc] + "..."
         blocks.append(
             f"[{i}] {tradition} - {scripture}\n"
-            f"{d.page_content.strip()}"
+            f"{content}"
         )
     return "\n\n".join(blocks)
 
@@ -204,13 +241,16 @@ def ask_question(
     if user_memory:
         memory_context = get_context_for_llm(user_memory)
     
-    # Build conversation context
+    # Build conversation context (reduced from 3 to 2 for faster processing)
     history_text = ""
     if conversation_history and len(conversation_history) > 0:
-        recent_history = conversation_history[-3:]
+        recent_history = conversation_history[-2:]  # Reduced from 3 to 2
         history_parts = []
         for user_q, advisor_a in recent_history:
-            history_parts.append(f"Seeker: {user_q}\nAdvisor: {advisor_a[:300]}...")
+            # Truncate both question and answer for faster processing
+            user_q_truncated = user_q[:150] + "..." if len(user_q) > 150 else user_q
+            advisor_a_truncated = advisor_a[:200] + "..." if len(advisor_a) > 200 else advisor_a
+            history_parts.append(f"Seeker: {user_q_truncated}\nAdvisor: {advisor_a_truncated}")
         history_text = "\n\n".join(history_parts)
     
     # Mode-specific prompts
@@ -265,7 +305,7 @@ Provide guidance that:
 
 Your guidance:"""
 
-    llm = Ollama(model=OLLAMA_MODEL)
+    llm = get_optimized_llm(max_tokens=512)
     
     response = llm.invoke([
         SystemMessage(content=system_prompt),
@@ -394,7 +434,7 @@ Please provide a thoughtful comparison that:
 
 Format with clear sections for each tradition, then a "Common Wisdom" section."""
 
-    llm = Ollama(model=OLLAMA_MODEL)
+    llm = get_optimized_llm(max_tokens=512)
     
     response = llm.invoke([
         SystemMessage(content=system_prompt),
@@ -452,7 +492,7 @@ Write a 2-3 sentence daily wisdom reflection that:
 
 Keep it concise and memorable."""
 
-    llm = Ollama(model=OLLAMA_MODEL)
+    llm = get_optimized_llm(max_tokens=512)
 
     response = llm.invoke([
         SystemMessage(content=system_prompt),
@@ -492,7 +532,7 @@ Offer a gentle reflection that:
 
 Keep your tone warm, curious, and supportive."""
 
-    llm = Ollama(model=OLLAMA_MODEL)
+    llm = get_optimized_llm(max_tokens=512)
     
     response = llm.invoke([
         SystemMessage(content=system_prompt),

@@ -1,17 +1,28 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { FloatingParticles } from "@/components/chat/FloatingParticles";
-import { Sparkles, Heart, BookOpen, Users, ArrowRight } from "lucide-react";
+import { Sparkles, Heart, BookOpen, Users, ArrowRight, User, LogOut } from "lucide-react";
+import { isAuthenticated, getStoredUser, logout } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const religions = [
-  { name: "Christianity", icon: "✝️" },
-  { name: "Islam", icon: "☪️" },
-  { name: "Judaism", icon: "✡️" },
-  { name: "Hinduism", icon: "🕉️" },
-  { name: "Buddhism", icon: "☸️" },
-  { name: "Sikhism", icon: "🪯" },
-  { name: "Taoism", icon: "☯️" },
-  { name: "Shinto", icon: "⛩️" },
+  { name: "Christianity", icon: "✝️", id: "christianity" },
+  { name: "Islam", icon: "☪️", id: "islam" },
+  { name: "Judaism", icon: "✡️", id: "judaism" },
+  { name: "Hinduism", icon: "🕉️", id: "hinduism" },
+  { name: "Buddhism", icon: "☸️", id: "buddhism" },
+  { name: "Sikhism", icon: "🪯", id: "sikhism" },
+  { name: "Taoism", icon: "☯️", id: "taoism" },
+  { name: "Shinto", icon: "⛩️", id: "shinto" },
 ];
 
 const features = [
@@ -38,6 +49,35 @@ const features = [
 ];
 
 const Landing = () => {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [user, setUser] = useState(getStoredUser());
+  const isLoggedIn = isAuthenticated();
+
+  // Update user state when auth changes
+  useEffect(() => {
+    setUser(getStoredUser());
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setUser(null);
+      toast({
+        title: "Signed out",
+        description: "You have been successfully signed out.",
+      });
+      // Refresh the page to update the UI
+      window.location.reload();
+    } catch (error) {
+      toast({
+        title: "Sign out failed",
+        description: "There was an error signing out. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-divine">
       <FloatingParticles />
@@ -55,12 +95,50 @@ const Landing = () => {
               </span>
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="ghost" asChild>
-                <Link to="/login">Sign In</Link>
-              </Button>
-              <Button variant="golden" asChild>
-                <Link to="/login">Get Started</Link>
-              </Button>
+              {isLoggedIn && user ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="rounded-full hover:bg-gold/10">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold to-accent flex items-center justify-center">
+                        <span className="text-sm font-semibold text-primary-foreground">
+                          {user.name?.charAt(0).toUpperCase() || user.email?.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{user.name || "Seeker"}</span>
+                        <span className="text-xs text-muted-foreground">{user.email}</span>
+                      </div>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => navigate("/community")}>
+                      <Users className="mr-2 h-4 w-4" />
+                      Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => navigate("/chat")}>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Chat
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleLogout}>
+                      <LogOut className="mr-2 h-4 w-4" />
+                      Sign out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <>
+                  <Button variant="ghost" asChild>
+                    <Link to="/login">Sign In</Link>
+                  </Button>
+                  <Button variant="golden" asChild>
+                    <Link to="/login">Get Started</Link>
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -94,15 +172,16 @@ const Landing = () => {
           {/* Religion Icons */}
           <div className="mt-16 flex flex-wrap justify-center gap-4">
             {religions.map((religion) => (
-              <div
+              <Link
                 key={religion.name}
-                className="flex items-center gap-2 px-4 py-2 rounded-full bg-card/60 border border-gold/20 backdrop-blur-sm"
+                to={`/chat?religion=${religion.id}`}
+                className="flex items-center gap-2 px-4 py-2 rounded-full bg-card/60 border border-gold/20 backdrop-blur-sm hover:border-gold/60 hover:bg-gold/10 transition-all duration-200 cursor-pointer"
               >
                 <span className="text-xl">{religion.icon}</span>
-                <span className="text-sm font-body text-muted-foreground">
+                <span className="text-sm font-body text-muted-foreground hover:text-foreground transition-colors">
                   {religion.name}
                 </span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>

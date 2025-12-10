@@ -100,12 +100,30 @@ export interface User {
 }
 
 /**
+ * Generate a UUID v4 compatible string
+ * Fallback for environments where crypto.randomUUID() is not available
+ */
+function generateUUID(): string {
+  // Try to use crypto.randomUUID() if available (modern browsers)
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  
+  // Fallback: Generate UUID v4 manually
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+/**
  * Get or create a session ID from localStorage
  */
 export function getSessionId(): string {
   let sessionId = localStorage.getItem("divine_wisdom_session_id");
   if (!sessionId) {
-    sessionId = crypto.randomUUID();
+    sessionId = generateUUID();
     localStorage.setItem("divine_wisdom_session_id", sessionId);
   }
   return sessionId;
@@ -121,6 +139,8 @@ async function apiRequest<T>(
   const url = `${API_BASE_URL}${endpoint}`;
   
   try {
+    console.log(`API Request: ${options.method || 'GET'} ${url}`, options.body ? JSON.parse(options.body as string) : '');
+    
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -129,13 +149,19 @@ async function apiRequest<T>(
       },
     });
 
+    console.log(`API Response: ${response.status} ${response.statusText}`);
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
+      console.error("API Error:", error);
       throw new Error(error.detail || `HTTP error! status: ${response.status}`);
     }
 
-    return await response.json();
+    const data = await response.json();
+    console.log("API Response data:", data);
+    return data;
   } catch (error) {
+    console.error("API Request failed:", error);
     if (error instanceof Error) {
       throw error;
     }
@@ -147,11 +173,17 @@ async function apiRequest<T>(
  * Send a chat message and get a response
  */
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
+  const authHeaders = getAuthHeaders();
   return apiRequest<ChatResponse>("/api/chat", {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders,
+    },
     body: JSON.stringify({
       ...request,
       session_id: request.session_id || getSessionId(),
+      authorization: authHeaders.Authorization || undefined,
     }),
   });
 }

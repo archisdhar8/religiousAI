@@ -21,11 +21,13 @@ from qa import (
 )
 from memory import (
     get_user_id,
+    get_user_id_from_email,
     load_user_memory,
     save_user_memory,
     add_exchange,
     add_journal_entry,
-    get_returning_user_greeting
+    get_returning_user_greeting,
+    migrate_session_memory_to_account
 )
 from config import TRADITIONS, ADVISOR_GREETING
 from auth import (
@@ -62,10 +64,20 @@ RELIGION_TO_TRADITION = {
 
 app = FastAPI(title="Divine Wisdom Guide API", version="1.0.0")
 
-# CORS middleware
+# CORS middleware - Allow localhost and local network IPs
+# For production, replace with specific allowed origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://192.168.1.200:8080",  # Allow local network IP
+        "http://localhost:5173",  # Vite default port
+        "http://127.0.0.1:5173",
+        # Allow any local network IP on port 8080 (for development)
+        # Pattern: http://192.168.*.*:8080, http://10.*.*.*:8080, http://172.16-31.*.*:8080
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+):(8080|5173)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,6 +92,7 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[Dict[str, str]]] = None
     mode: str = "standard"
     use_multi_agent: bool = False  # Enable multi-agent system
+    authorization: Optional[str] = None  # Bearer token for authenticated users
 
 
 class ChatResponse(BaseModel):
@@ -103,6 +116,7 @@ class CompareRequest(BaseModel):
 class JournalRequest(BaseModel):
     entry: str
     session_id: Optional[str] = None
+    authorization: Optional[str] = None  # Bearer token for authenticated users
 
 
 class TraditionsResponse(BaseModel):
@@ -291,10 +305,32 @@ async def chat(request: ChatRequest):
             )
         
         # Regular chat flow
-        # Get user memory
-        session_id = request.session_id or str(uuid.uuid4())
-        user_id = get_user_id(session_id)
-        user_memory = load_user_memory(user_id)
+        # Get user memory - use email-based ID if authenticated, otherwise session-based
+        user_email = None
+        user_id = None
+        
+        # Check if user is authenticated via authorization header
+        try:
+            if request.authorization:
+                user_email = get_email_from_auth(request.authorization)
+                if user_email:
+                    # Use email-based user ID for authenticated users
+                    user_id = get_user_id_from_email(user_email)
+                    # Link email to memory if not already linked
+                    user_memory = load_user_memory(user_id)
+                    if not user_memory.get("email"):
+                        user_memory["email"] = user_email
+                        save_user_memory(user_id, user_memory)
+        except HTTPException:
+            # Invalid token, fall back to session-based
+            pass
+        
+        # If not authenticated or auth failed, use session-based ID
+        if not user_id:
+            session_id = request.session_id or str(uuid.uuid4())
+            user_id = get_user_id(session_id)
+            user_memory = load_user_memory(user_id)
+        
         user_memory["visit_count"] = user_memory.get("visit_count", 0) + 1
         
         # Convert religion to tradition
@@ -466,10 +502,31 @@ async def compare(request: CompareRequest):
 async def journal(request: JournalRequest):
     """Generate a reflection on a journal entry."""
     try:
-        # Get user memory
-        session_id = request.session_id or str(uuid.uuid4())
-        user_id = get_user_id(session_id)
-        user_memory = load_user_memory(user_id)
+        # Get user memory - use email-based ID if authenticated, otherwise session-based
+        user_email = None
+        user_id = None
+        
+        # Check if user is authenticated via authorization header
+        try:
+            if request.authorization:
+                user_email = get_email_from_auth(request.authorization)
+                if user_email:
+                    # Use email-based user ID for authenticated users
+                    user_id = get_user_id_from_email(user_email)
+                    # Link email to memory if not already linked
+                    user_memory = load_user_memory(user_id)
+                    if not user_memory.get("email"):
+                        user_memory["email"] = user_email
+                        save_user_memory(user_id, user_memory)
+        except HTTPException:
+            # Invalid token, fall back to session-based
+            pass
+        
+        # If not authenticated or auth failed, use session-based ID
+        if not user_id:
+            session_id = request.session_id or str(uuid.uuid4())
+            user_id = get_user_id(session_id)
+            user_memory = load_user_memory(user_id)
         
         # Generate reflection
         reflection = generate_journal_reflection(request.entry, user_memory)
@@ -503,13 +560,28 @@ async def get_user(user_id: str):
 
 
 @app.get("/api/greeting")
-async def get_greeting(session_id: Optional[str] = None):
+async def get_greeting(session_id: Optional[str] = None, authorization: Optional[str] = None):
     """Get personalized greeting for returning users."""
     try:
-        if not session_id:
-            return {"greeting": ADVISOR_GREETING}
+        user_id = None
         
-        user_id = get_user_id(session_id)
+        # Check if user is authenticated via authorization header
+        try:
+            if authorization:
+                user_email = get_email_from_auth(authorization)
+                if user_email:
+                    # Use email-based user ID for authenticated users
+                    user_id = get_user_id_from_email(user_email)
+        except HTTPException:
+            # Invalid token, fall back to session-based
+            pass
+        
+        # If not authenticated or auth failed, use session-based ID
+        if not user_id:
+            if not session_id:
+                return {"greeting": ADVISOR_GREETING}
+            user_id = get_user_id(session_id)
+        
         user_memory = load_user_memory(user_id)
         greeting = get_returning_user_greeting(user_memory)
         
@@ -518,6 +590,41 @@ async def get_greeting(session_id: Optional[str] = None):
         }
     except Exception as e:
         return {"greeting": ADVISOR_GREETING}
+
+
+@app.post("/api/migrate-memory")
+async def migrate_memory(authorization: Optional[str] = None, session_id: Optional[str] = None):
+    """
+    Migrate session-based memory to account-based memory.
+    
+    This endpoint should be called after a user logs in to migrate their
+    session-based memory to their account-based memory.
+    """
+    try:
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required for migration")
+        
+        # Get user email from auth token
+        user_email = get_email_from_auth(authorization)
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id required for migration")
+        
+        # Perform migration
+        success = migrate_session_memory_to_account(session_id, user_email)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "Memory migrated successfully"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to migrate memory")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error migrating memory: {str(e)}")
 
 
 # =====================================================================
@@ -529,24 +636,46 @@ async def signup(request: SignUpRequest):
     """
     Create a new user account.
     """
-    success, message = create_user(
-        email=request.email,
-        password=request.password,
-        name=request.name
-    )
-    
-    if success:
-        # Auto-login after signup
-        token = create_session(request.email)
-        user = get_user_by_email(request.email)
-        return AuthResponse(
-            success=True,
-            message=message,
-            token=token,
-            user=user
+    try:
+        # Normalize email and handle empty name
+        email = request.email.lower().strip() if request.email else ""
+        name = request.name.strip() if request.name and request.name.strip() else None
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        if not request.password:
+            raise HTTPException(status_code=400, detail="Password is required")
+        
+        success, message = create_user(
+            email=email,
+            password=request.password,
+            name=name
         )
-    else:
-        raise HTTPException(status_code=400, detail=message)
+        
+        if success:
+            # Auto-login after signup
+            token = create_session(email)
+            user = get_user_by_email(email)
+            
+            if not user:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Account created but failed to retrieve user data. Please try logging in."
+                )
+            
+            return AuthResponse(
+                success=True,
+                message=message,
+                token=token,
+                user=user
+            )
+        else:
+            raise HTTPException(status_code=400, detail=message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during signup: {str(e)}")
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
@@ -554,21 +683,41 @@ async def login(request: LoginRequest):
     """
     Login with email and password.
     """
-    success, message, user = authenticate_user(
-        email=request.email,
-        password=request.password
-    )
-    
-    if success:
-        token = create_session(request.email)
-        return AuthResponse(
-            success=True,
-            message=message,
-            token=token,
-            user=user
+    try:
+        # Normalize email
+        email = request.email.lower().strip() if request.email else ""
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        if not request.password:
+            raise HTTPException(status_code=400, detail="Password is required")
+        
+        success, message, user = authenticate_user(
+            email=email,
+            password=request.password
         )
-    else:
-        raise HTTPException(status_code=401, detail=message)
+        
+        if success:
+            if not user:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Authentication succeeded but failed to retrieve user data."
+                )
+            
+            token = create_session(email)
+            return AuthResponse(
+                success=True,
+                message=message,
+                token=token,
+                user=user
+            )
+        else:
+            raise HTTPException(status_code=401, detail=message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during login: {str(e)}")
 
 
 @app.post("/api/auth/logout")

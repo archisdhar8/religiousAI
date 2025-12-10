@@ -1,0 +1,11 @@
+{
+  "email": "test@example.com",
+  "password_hash": "47c899a28ede5672ca1ce1b35bc2f502:fe97d113811791549c7e6876f0692a187c873b1629400d1c93ffcbaaf4cc2071",
+  "name": "Test User",
+  "created_at": "2025-12-10T00:09:02.014892",
+  "last_login": null,
+  "preferences": {
+    "default_religion": "christianity",
+    "theme": "dark"
+  }
+}

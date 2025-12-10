@@ -120,19 +120,126 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
         return False, f"Error during authentication: {str(e)}", None
 
 
-def create_session(email: str) -> str:
-    """Create a new session token for a user."""
+def get_existing_valid_session(email: str) -> Optional[str]:
+    """
+    Find an existing valid session for a user.
+    
+    Returns:
+        Session token if found, None otherwise
+    """
+    email = email.lower()
+    
+    if not os.path.exists(SESSIONS_DIR):
+        return None
+    
+    try:
+        # Check all session files
+        for filename in os.listdir(SESSIONS_DIR):
+            if not filename.endswith('.json'):
+                continue
+            
+            session_file = os.path.join(SESSIONS_DIR, filename)
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # Check if session belongs to this user and is still valid
+                if session_data.get("email", "").lower() == email:
+                    expires_at = datetime.fromisoformat(session_data["expires_at"])
+                    if datetime.now() <= expires_at:
+                        # Valid session found, return the token (filename without .json)
+                        return filename[:-5]  # Remove .json extension
+                    else:
+                        # Expired session, delete it
+                        try:
+                            os.unlink(session_file)
+                        except:
+                            pass
+            except:
+                # Skip invalid session files
+                continue
+        
+        return None
+    except:
+        return None
+
+
+def cleanup_user_sessions(email: str, keep_token: Optional[str] = None):
+    """
+    Clean up all sessions for a user, optionally keeping one.
+    
+    Args:
+        email: User email
+        keep_token: Optional token to keep (all others will be deleted)
+    """
+    email = email.lower()
+    
+    if not os.path.exists(SESSIONS_DIR):
+        return
+    
+    try:
+        for filename in os.listdir(SESSIONS_DIR):
+            if not filename.endswith('.json'):
+                continue
+            
+            token = filename[:-5]  # Remove .json extension
+            
+            # Skip the token we want to keep
+            if keep_token and token == keep_token:
+                continue
+            
+            session_file = os.path.join(SESSIONS_DIR, filename)
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # Delete if it belongs to this user
+                if session_data.get("email", "").lower() == email:
+                    try:
+                        os.unlink(session_file)
+                    except:
+                        pass
+            except:
+                # Skip invalid session files
+                continue
+    except:
+        pass
+
+
+def create_session(email: str, reuse_existing: bool = True) -> str:
+    """
+    Create a new session token for a user.
+    
+    Args:
+        email: User email
+        reuse_existing: If True, reuse existing valid session if available
+    
+    Returns:
+        Session token
+    """
+    email = email.lower()
+    
+    # Try to reuse existing valid session if requested
+    if reuse_existing:
+        existing_token = get_existing_valid_session(email)
+        if existing_token:
+            return existing_token
+    
+    # Create new session
     token = secrets.token_urlsafe(32)
     
     session_data = {
-        "email": email.lower(),
+        "email": email,
         "created_at": datetime.now().isoformat(),
         "expires_at": (datetime.now() + timedelta(days=7)).isoformat()
     }
     
     session_file = os.path.join(SESSIONS_DIR, f"{token}.json")
     with open(session_file, 'w', encoding='utf-8') as f:
-        json.dump(session_data, f)
+        json.dump(session_data, f, indent=2)
+    
+    # Clean up old sessions for this user (keep the new one)
+    cleanup_user_sessions(email, keep_token=token)
     
     return token
 
