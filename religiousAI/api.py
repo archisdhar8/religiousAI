@@ -27,7 +27,19 @@ from memory import (
     add_exchange,
     add_journal_entry,
     get_returning_user_greeting,
-    migrate_session_memory_to_account
+    migrate_session_memory_to_account,
+    # Chat management (multiple conversations)
+    create_new_chat,
+    get_chat,
+    get_all_chats,
+    get_current_chat_id,
+    set_current_chat,
+    add_message_to_chat,
+    get_chat_messages,
+    delete_chat,
+    rename_chat,
+    get_or_create_current_chat,
+    migrate_old_conversations_to_chats
 )
 from config import TRADITIONS, ADVISOR_GREETING
 from auth import (
@@ -89,6 +101,7 @@ class ChatRequest(BaseModel):
     message: str
     religion: Optional[str] = None  # Frontend religion ID
     session_id: Optional[str] = None
+    chat_id: Optional[str] = None  # Specific chat thread to use
     conversation_history: Optional[List[Dict[str, str]]] = None
     mode: str = "standard"
     use_multi_agent: bool = False  # Enable multi-agent system
@@ -100,6 +113,7 @@ class ChatResponse(BaseModel):
     is_crisis: bool
     sources: Optional[List[Dict]] = None
     agent_outputs: Optional[Dict[str, str]] = None  # Individual agent responses (for transparency)
+    chat_id: Optional[str] = None  # The chat thread this message belongs to
 
 
 class DailyWisdomResponse(BaseModel):
@@ -147,6 +161,46 @@ class UserResponse(BaseModel):
     name: str
     created_at: str
     preferences: Dict
+
+
+# Chat Management Models
+class NewChatRequest(BaseModel):
+    religion: Optional[str] = None
+    title: Optional[str] = None
+
+
+class ChatSummary(BaseModel):
+    id: str
+    title: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    religion: Optional[str]
+    message_count: int
+    preview: str
+
+
+class ChatListResponse(BaseModel):
+    chats: List[ChatSummary]
+    current_chat_id: Optional[str]
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: str
+
+
+class ChatDetailResponse(BaseModel):
+    id: str
+    title: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    religion: Optional[str]
+    messages: List[ChatMessage]
+
+
+class RenameChatRequest(BaseModel):
+    title: str
 
 
 def get_tradition_from_religion(religion_id: Optional[str]) -> Optional[List[str]]:
@@ -297,11 +351,39 @@ async def chat(request: ChatRequest):
                             "content": doc.page_content[:300] + "..."
                         })
             
+            # Save comparison to chat history
+            current_chat_id = None
+            try:
+                user_id = None
+                if request.authorization:
+                    try:
+                        email = get_email_from_auth(request.authorization)
+                        user_id = get_user_id_from_email(email)
+                    except:
+                        pass
+                if not user_id and request.session_id:
+                    user_id = get_user_id(request.session_id)
+                
+                if user_id:
+                    if request.chat_id:
+                        chat = get_chat(user_id, request.chat_id)
+                        if chat:
+                            current_chat_id = request.chat_id
+                    if not current_chat_id:
+                        chat = get_or_create_current_chat(user_id)
+                        current_chat_id = chat["id"]
+                    
+                    add_message_to_chat(user_id, current_chat_id, "user", request.message)
+                    add_message_to_chat(user_id, current_chat_id, "assistant", comparison_result)
+            except:
+                pass
+            
             return ChatResponse(
                 response=comparison_result,
                 is_crisis=False,
                 sources=sources,
-                agent_outputs={"mode": "cross-religious-comparison", "traditions": compare_traditions_list}
+                agent_outputs={"mode": "cross-religious-comparison", "traditions": compare_traditions_list},
+                chat_id=current_chat_id
             )
         
         # Regular chat flow
@@ -385,8 +467,27 @@ async def chat(request: ChatRequest):
                 for doc in docs
             ]
         
-        # Save to memory if not crisis
+        # Get or create chat thread
+        current_chat_id = None
         if not is_crisis:
+            # Use provided chat_id or get/create current chat
+            if request.chat_id:
+                chat = get_chat(user_id, request.chat_id)
+                if chat:
+                    current_chat_id = request.chat_id
+            
+            if not current_chat_id:
+                # Get or create a new chat
+                chat = get_or_create_current_chat(user_id, request.religion)
+                current_chat_id = chat["id"]
+            
+            # Add user message to chat
+            add_message_to_chat(user_id, current_chat_id, "user", request.message)
+            
+            # Add assistant response to chat
+            add_message_to_chat(user_id, current_chat_id, "assistant", response_text)
+            
+            # Also save to old memory format for backward compatibility
             user_memory = add_exchange(
                 user_memory,
                 request.message,
@@ -399,7 +500,8 @@ async def chat(request: ChatRequest):
             response=response_text,
             is_crisis=is_crisis,
             sources=sources,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
+            chat_id=current_chat_id
         )
     
     except Exception as e:
@@ -625,6 +727,222 @@ async def migrate_memory(authorization: Optional[str] = None, session_id: Option
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error migrating memory: {str(e)}")
+
+
+# =====================================================================
+# CHAT MANAGEMENT ENDPOINTS (Multiple Conversations like ChatGPT)
+# =====================================================================
+
+@app.get("/api/chats", response_model=ChatListResponse)
+async def list_chats(authorization: Optional[str] = None, session_id: Optional[str] = None):
+    """
+    Get all chat conversations for the current user.
+    Returns list of chat summaries for the sidebar.
+    """
+    try:
+        user_id = None
+        
+        # Check if user is authenticated
+        try:
+            if authorization:
+                email = get_email_from_auth(authorization)
+                user_id = get_user_id_from_email(email)
+        except HTTPException:
+            pass
+        
+        # Fall back to session-based
+        if not user_id:
+            if session_id:
+                user_id = get_user_id(session_id)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication or session_id required")
+        
+        # Migrate old conversations to new chat format if needed
+        migrate_old_conversations_to_chats(user_id)
+        
+        chats = get_all_chats(user_id)
+        current_id = get_current_chat_id(user_id)
+        
+        return ChatListResponse(
+            chats=[ChatSummary(**c) for c in chats],
+            current_chat_id=current_id
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing chats: {str(e)}")
+
+
+@app.post("/api/chats", response_model=ChatDetailResponse)
+async def create_chat(
+    request: NewChatRequest,
+    authorization: Optional[str] = None, 
+    session_id: Optional[str] = None
+):
+    """
+    Create a new chat conversation.
+    """
+    try:
+        user_id = None
+        
+        # Check if user is authenticated
+        try:
+            if authorization:
+                email = get_email_from_auth(authorization)
+                user_id = get_user_id_from_email(email)
+        except HTTPException:
+            pass
+        
+        # Fall back to session-based
+        if not user_id:
+            if session_id:
+                user_id = get_user_id(session_id)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication or session_id required")
+        
+        chat = create_new_chat(
+            user_id, 
+            religion=request.religion,
+            title=request.title
+        )
+        
+        return ChatDetailResponse(
+            id=chat["id"],
+            title=chat["title"],
+            created_at=chat.get("created_at"),
+            updated_at=chat.get("updated_at"),
+            religion=chat.get("religion"),
+            messages=[]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating chat: {str(e)}")
+
+
+@app.get("/api/chats/{chat_id}", response_model=ChatDetailResponse)
+async def get_chat_detail(
+    chat_id: str,
+    authorization: Optional[str] = None, 
+    session_id: Optional[str] = None
+):
+    """
+    Get a specific chat conversation with all messages.
+    """
+    try:
+        user_id = None
+        
+        # Check if user is authenticated
+        try:
+            if authorization:
+                email = get_email_from_auth(authorization)
+                user_id = get_user_id_from_email(email)
+        except HTTPException:
+            pass
+        
+        # Fall back to session-based
+        if not user_id:
+            if session_id:
+                user_id = get_user_id(session_id)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication or session_id required")
+        
+        chat = get_chat(user_id, chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        # Also set this as the current chat
+        set_current_chat(user_id, chat_id)
+        
+        return ChatDetailResponse(
+            id=chat["id"],
+            title=chat["title"],
+            created_at=chat.get("created_at"),
+            updated_at=chat.get("updated_at"),
+            religion=chat.get("religion"),
+            messages=[ChatMessage(**m) for m in chat.get("messages", [])]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting chat: {str(e)}")
+
+
+@app.put("/api/chats/{chat_id}")
+async def update_chat(
+    chat_id: str,
+    request: RenameChatRequest,
+    authorization: Optional[str] = None, 
+    session_id: Optional[str] = None
+):
+    """
+    Rename a chat conversation.
+    """
+    try:
+        user_id = None
+        
+        # Check if user is authenticated
+        try:
+            if authorization:
+                email = get_email_from_auth(authorization)
+                user_id = get_user_id_from_email(email)
+        except HTTPException:
+            pass
+        
+        # Fall back to session-based
+        if not user_id:
+            if session_id:
+                user_id = get_user_id(session_id)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication or session_id required")
+        
+        success = rename_chat(user_id, chat_id, request.title)
+        if not success:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        return {"success": True, "message": "Chat renamed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error renaming chat: {str(e)}")
+
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat_endpoint(
+    chat_id: str,
+    authorization: Optional[str] = None, 
+    session_id: Optional[str] = None
+):
+    """
+    Delete a chat conversation.
+    """
+    try:
+        user_id = None
+        
+        # Check if user is authenticated
+        try:
+            if authorization:
+                email = get_email_from_auth(authorization)
+                user_id = get_user_id_from_email(email)
+        except HTTPException:
+            pass
+        
+        # Fall back to session-based
+        if not user_id:
+            if session_id:
+                user_id = get_user_id(session_id)
+            else:
+                raise HTTPException(status_code=401, detail="Authentication or session_id required")
+        
+        success = delete_chat(user_id, chat_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        return {"success": True, "message": "Chat deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting chat: {str(e)}")
 
 
 # =====================================================================

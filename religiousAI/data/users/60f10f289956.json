@@ -1,0 +1,50 @@
+{
+  "user_id": "60f10f289956",
+  "email": null,
+  "created_at": "2025-12-10T16:33:27.338436",
+  "last_visit": "2025-12-10T16:55:28.314458",
+  "visit_count": 0,
+  "conversations": [],
+  "themes": [],
+  "journal_entries": [],
+  "preferences": {
+    "traditions": [],
+    "ui_mode": "standard",
+    "ambient_sound": "Silence"
+  },
+  "personality_traits": {},
+  "spiritual_journey": {
+    "primary_concerns": [],
+    "growth_areas": [],
+    "milestones": []
+  },
+  "preferred_wisdom_style": null,
+  "conversation_summary": "",
+  "chats": [
+    {
+      "id": "599abdaa",
+      "title": "New Conversation",
+      "created_at": "2025-12-10T16:55:28.314409",
+      "updated_at": "2025-12-10T16:55:28.314421",
+      "religion": "christianity",
+      "messages": []
+    },
+    {
+      "id": "413e2020",
+      "title": "New Conversation",
+      "created_at": "2025-12-10T16:36:38.523752",
+      "updated_at": "2025-12-10T16:36:38.523767",
+      "religion": "christianity",
+      "messages": []
+    },
+    {
+      "id": "156dd45d",
+      "title": "New Conversation",
+      "created_at": "2025-12-10T16:33:27.338512",
+      "updated_at": "2025-12-10T16:33:27.338515",
+      "religion": "christianity",
+      "messages": []
+    }
+  ],
+  "current_chat_id": "599abdaa"
+}

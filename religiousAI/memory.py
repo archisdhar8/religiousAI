@@ -3,11 +3,18 @@ Memory Module for Divine Wisdom Guide
 
 Implements persistent conversation memory so the advisor can remember
 past conversations and build a relationship with the seeker.
+
+Supports multiple chat threads (like ChatGPT) with:
+- Create new chats
+- Switch between chats
+- Continue old conversations
+- Auto-generate chat titles
 """
 
 import os
 import json
 import hashlib
+import uuid
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from config import USER_DATA_DIR
@@ -394,6 +401,311 @@ def get_context_for_llm(memory: Dict) -> str:
         return ""
     
     return "SEEKER CONTEXT:\n" + "\n".join(parts) + "\n"
+
+
+# =====================================================================
+# CHAT MANAGEMENT (Multiple Conversations like ChatGPT)
+# =====================================================================
+
+def create_new_chat(user_id: str, religion: str = None, title: str = None) -> Dict:
+    """
+    Create a new chat thread for a user.
+    
+    Returns:
+        The new chat object
+    """
+    memory = load_user_memory(user_id)
+    
+    # Initialize chats list if not exists
+    if "chats" not in memory:
+        memory["chats"] = []
+    
+    # Generate incremental title if not provided
+    if not title:
+        # Count existing "New Chat X" titles to determine next number
+        existing_numbers = []
+        for chat in memory["chats"]:
+            chat_title = chat.get("title", "")
+            if chat_title.startswith("New Chat "):
+                try:
+                    num = int(chat_title.replace("New Chat ", ""))
+                    existing_numbers.append(num)
+                except ValueError:
+                    pass
+        
+        # Find next available number
+        next_num = 1
+        if existing_numbers:
+            next_num = max(existing_numbers) + 1
+        
+        title = f"New Chat {next_num}"
+    
+    # Create new chat
+    chat_id = str(uuid.uuid4())[:8]
+    new_chat = {
+        "id": chat_id,
+        "title": title,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "religion": religion,
+        "messages": []
+    }
+    
+    # Add to beginning of list (most recent first)
+    memory["chats"].insert(0, new_chat)
+    memory["current_chat_id"] = chat_id
+    
+    # Limit to 50 chats max
+    memory["chats"] = memory["chats"][:50]
+    
+    save_user_memory(user_id, memory)
+    
+    return new_chat
+
+
+def get_chat(user_id: str, chat_id: str) -> Optional[Dict]:
+    """Get a specific chat by ID."""
+    memory = load_user_memory(user_id)
+    
+    for chat in memory.get("chats", []):
+        if chat["id"] == chat_id:
+            return chat
+    
+    return None
+
+
+def get_all_chats(user_id: str) -> List[Dict]:
+    """
+    Get all chats for a user (summary only, not full messages).
+    Returns list sorted by most recent.
+    """
+    memory = load_user_memory(user_id)
+    chats = memory.get("chats", [])
+    
+    # Return summaries only (for sidebar)
+    summaries = []
+    for chat in chats:
+        summaries.append({
+            "id": chat["id"],
+            "title": chat.get("title", "Untitled"),
+            "created_at": chat.get("created_at"),
+            "updated_at": chat.get("updated_at"),
+            "religion": chat.get("religion"),
+            "message_count": len(chat.get("messages", [])),
+            "preview": chat["messages"][-1]["content"][:50] + "..." if chat.get("messages") else ""
+        })
+    
+    return summaries
+
+
+def get_current_chat_id(user_id: str) -> Optional[str]:
+    """Get the ID of the user's current active chat."""
+    memory = load_user_memory(user_id)
+    return memory.get("current_chat_id")
+
+
+def set_current_chat(user_id: str, chat_id: str) -> bool:
+    """Set the current active chat."""
+    memory = load_user_memory(user_id)
+    
+    # Verify chat exists
+    chat_exists = any(c["id"] == chat_id for c in memory.get("chats", []))
+    if not chat_exists:
+        return False
+    
+    memory["current_chat_id"] = chat_id
+    save_user_memory(user_id, memory)
+    return True
+
+
+def add_message_to_chat(
+    user_id: str, 
+    chat_id: str, 
+    role: str, 
+    content: str
+) -> Optional[Dict]:
+    """
+    Add a message to a specific chat.
+    
+    Args:
+        user_id: The user's ID
+        chat_id: The chat thread ID
+        role: "user" or "assistant"
+        content: The message content
+    
+    Returns:
+        The updated chat, or None if not found
+    """
+    memory = load_user_memory(user_id)
+    
+    for chat in memory.get("chats", []):
+        if chat["id"] == chat_id:
+            # Add message
+            chat["messages"].append({
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now().isoformat()
+            })
+            chat["updated_at"] = datetime.now().isoformat()
+            
+            # Auto-generate title from first user message
+            if chat["title"] == "New Conversation" and role == "user":
+                # Use first 40 chars of first message as title
+                chat["title"] = content[:40] + ("..." if len(content) > 40 else "")
+            
+            # Move this chat to top of list (most recent)
+            memory["chats"].remove(chat)
+            memory["chats"].insert(0, chat)
+            
+            save_user_memory(user_id, memory)
+            
+            # Also update themes for matching
+            if role == "user":
+                update_themes(memory, content)
+                save_user_memory(user_id, memory)
+            
+            return chat
+    
+    return None
+
+
+def get_chat_messages(user_id: str, chat_id: str) -> List[Dict]:
+    """Get all messages from a specific chat."""
+    chat = get_chat(user_id, chat_id)
+    if not chat:
+        return []
+    return chat.get("messages", [])
+
+
+def delete_chat(user_id: str, chat_id: str) -> bool:
+    """Delete a chat thread."""
+    memory = load_user_memory(user_id)
+    
+    original_count = len(memory.get("chats", []))
+    memory["chats"] = [c for c in memory.get("chats", []) if c["id"] != chat_id]
+    
+    if len(memory["chats"]) < original_count:
+        # Chat was deleted
+        # If deleted chat was current, set new current
+        if memory.get("current_chat_id") == chat_id:
+            if memory["chats"]:
+                memory["current_chat_id"] = memory["chats"][0]["id"]
+            else:
+                memory["current_chat_id"] = None
+        
+        save_user_memory(user_id, memory)
+        return True
+    
+    return False
+
+
+def rename_chat(user_id: str, chat_id: str, new_title: str) -> bool:
+    """Rename a chat thread."""
+    memory = load_user_memory(user_id)
+    
+    for chat in memory.get("chats", []):
+        if chat["id"] == chat_id:
+            chat["title"] = new_title[:100]  # Limit title length
+            save_user_memory(user_id, memory)
+            return True
+    
+    return False
+
+
+def get_or_create_current_chat(user_id: str, religion: str = None) -> Dict:
+    """
+    Get the current chat, or create one if none exists.
+    Used to ensure there's always an active chat.
+    """
+    memory = load_user_memory(user_id)
+    
+    # Check if current chat exists
+    current_id = memory.get("current_chat_id")
+    if current_id:
+        chat = get_chat(user_id, current_id)
+        if chat:
+            return chat
+    
+    # Check if any chats exist
+    if memory.get("chats") and len(memory["chats"]) > 0:
+        # Use first (most recent) chat
+        memory["current_chat_id"] = memory["chats"][0]["id"]
+        save_user_memory(user_id, memory)
+        return memory["chats"][0]
+    
+    # Create new chat
+    return create_new_chat(user_id, religion)
+
+
+def migrate_old_conversations_to_chats(user_id: str) -> int:
+    """
+    Migrate old-style conversations to new chat format.
+    Returns number of chats created.
+    """
+    memory = load_user_memory(user_id)
+    
+    old_convs = memory.get("conversations", [])
+    if not old_convs:
+        return 0
+    
+    if "chats" not in memory:
+        memory["chats"] = []
+    
+    migrated = 0
+    
+    for conv in old_convs:
+        # Skip if no exchanges
+        exchanges = conv.get("exchanges", [])
+        if not exchanges:
+            continue
+        
+        # Create chat from conversation
+        chat_id = str(uuid.uuid4())[:8]
+        
+        # Build messages
+        messages = []
+        for exchange in exchanges:
+            messages.append({
+                "role": "user",
+                "content": exchange.get("question", ""),
+                "timestamp": exchange.get("timestamp", conv.get("date"))
+            })
+            messages.append({
+                "role": "assistant", 
+                "content": exchange.get("answer", ""),
+                "timestamp": exchange.get("timestamp", conv.get("date"))
+            })
+        
+        # Create title from first question
+        title = exchanges[0].get("question", "Conversation")[:40]
+        if len(exchanges[0].get("question", "")) > 40:
+            title += "..."
+        
+        chat = {
+            "id": chat_id,
+            "title": title,
+            "created_at": conv.get("date", datetime.now().isoformat()),
+            "updated_at": conv.get("date", datetime.now().isoformat()),
+            "religion": exchanges[0].get("traditions", [None])[0] if exchanges[0].get("traditions") else None,
+            "messages": messages
+        }
+        
+        memory["chats"].append(chat)
+        migrated += 1
+    
+    # Sort by date
+    memory["chats"].sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    
+    # Set current chat
+    if memory["chats"] and not memory.get("current_chat_id"):
+        memory["current_chat_id"] = memory["chats"][0]["id"]
+    
+    # Clear old conversations (optional - keep for backup)
+    # memory["conversations"] = []
+    
+    save_user_memory(user_id, memory)
+    
+    return migrated
 
 
 def migrate_session_memory_to_account(session_id: str, email: str) -> bool:

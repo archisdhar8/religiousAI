@@ -8,6 +8,7 @@ export interface ChatRequest {
   message: string;
   religion?: string;
   session_id?: string;
+  chat_id?: string; // Specific chat thread to use
   conversation_history?: Array<{ question: string; answer: string }>;
   mode?: string;
 }
@@ -20,6 +21,38 @@ export interface ChatResponse {
     scripture: string;
     content: string;
   }>;
+  chat_id?: string; // The chat thread this message belongs to
+}
+
+// Chat Management Types (multiple conversations like ChatGPT)
+export interface ChatSummary {
+  id: string;
+  title: string;
+  created_at?: string;
+  updated_at?: string;
+  religion?: string;
+  message_count: number;
+  preview: string;
+}
+
+export interface ChatListResponse {
+  chats: ChatSummary[];
+  current_chat_id?: string;
+}
+
+export interface ChatMessageData {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
+export interface ChatDetail {
+  id: string;
+  title: string;
+  created_at?: string;
+  updated_at?: string;
+  religion?: string;
+  messages: ChatMessageData[];
 }
 
 export interface DailyWisdomResponse {
@@ -251,6 +284,81 @@ export async function getGreeting(): Promise<GreetingResponse> {
 
 
 // =====================================================================
+// CHAT MANAGEMENT FUNCTIONS (Multiple Conversations)
+// =====================================================================
+
+/**
+ * Get all chats for the current user
+ */
+export async function getChats(): Promise<ChatListResponse> {
+  const authHeaders = getAuthHeaders();
+  const params = new URLSearchParams();
+  params.append("session_id", getSessionId());
+  
+  return apiRequest<ChatListResponse>(`/api/chats?${params.toString()}`, {
+    headers: authHeaders,
+  });
+}
+
+/**
+ * Create a new chat conversation
+ */
+export async function createChat(religion?: string, title?: string): Promise<ChatDetail> {
+  const authHeaders = getAuthHeaders();
+  const params = new URLSearchParams();
+  params.append("session_id", getSessionId());
+  
+  return apiRequest<ChatDetail>(`/api/chats?${params.toString()}`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ religion, title }),
+  });
+}
+
+/**
+ * Get a specific chat with all messages
+ */
+export async function getChatById(chatId: string): Promise<ChatDetail> {
+  const authHeaders = getAuthHeaders();
+  const params = new URLSearchParams();
+  params.append("session_id", getSessionId());
+  
+  return apiRequest<ChatDetail>(`/api/chats/${chatId}?${params.toString()}`, {
+    headers: authHeaders,
+  });
+}
+
+/**
+ * Rename a chat
+ */
+export async function renameChat(chatId: string, title: string): Promise<{ success: boolean; message: string }> {
+  const authHeaders = getAuthHeaders();
+  const params = new URLSearchParams();
+  params.append("session_id", getSessionId());
+  
+  return apiRequest(`/api/chats/${chatId}?${params.toString()}`, {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({ title }),
+  });
+}
+
+/**
+ * Delete a chat
+ */
+export async function deleteChatById(chatId: string): Promise<{ success: boolean; message: string }> {
+  const authHeaders = getAuthHeaders();
+  const params = new URLSearchParams();
+  params.append("session_id", getSessionId());
+  
+  return apiRequest(`/api/chats/${chatId}?${params.toString()}`, {
+    method: "DELETE",
+    headers: authHeaders,
+  });
+}
+
+
+// =====================================================================
 // AUTH FUNCTIONS
 // =====================================================================
 
@@ -419,7 +527,7 @@ export interface ConnectionRequestData {
 /**
  * Get authenticated headers
  */
-function getAuthHeaders(): Record<string, string> {
+export function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
