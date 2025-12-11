@@ -18,6 +18,10 @@ fastapi
 uvicorn[standard]
 pydantic
 
+# Supabase
+supabase
+python-dotenv
+
 # Voice Integration (optional - install if using voice features)
 # openai-whisper      # For speech-to-text
 # TTS                 # For text-to-speech (Coqui TTS)

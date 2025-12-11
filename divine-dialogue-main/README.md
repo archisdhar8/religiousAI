@@ -1,73 +1,128 @@
-# Welcome to your Lovable project
+# Divine Wisdom Guide - Frontend
 
-## Project info
+React + TypeScript frontend for the Divine Wisdom Guide application.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## 🚀 Quick Start
 
-## How can I edit this code?
+### Prerequisites
 
-There are several ways of editing your application.
+- Node.js 18+ and npm
+- Backend API server running (see main [README.md](../README.md))
 
-**Use Lovable**
+### Installation
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+```bash
+# Install dependencies
+npm install
 
-Changes made via Lovable will be committed automatically to this repo.
+# Create .env file (optional - defaults to http://localhost:8000)
+echo "VITE_API_URL=http://localhost:8000" > .env
 
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Start development server
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+The app will be available at http://localhost:8080
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## 📁 Project Structure
 
-**Use GitHub Codespaces**
+```
+divine-dialogue-main/
+├── src/
+│   ├── pages/              # Page components
+│   │   ├── Chat.tsx        # Main chat interface
+│   │   ├── Community.tsx   # Community features
+│   │   ├── Landing.tsx     # Landing page
+│   │   └── Login.tsx       # Authentication
+│   │
+│   ├── components/         # Reusable components
+│   │   ├── chat/          # Chat-specific components
+│   │   └── ui/            # shadcn/ui components
+│   │
+│   ├── lib/
+│   │   ├── api.ts         # API client functions
+│   │   └── utils.ts       # Utility functions
+│   │
+│   └── hooks/             # Custom React hooks
+│
+├── public/                # Static assets
+└── package.json
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## 🔧 Configuration
 
-## What technologies are used for this project?
+### Environment Variables
 
-This project is built with:
+Create `.env` file:
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+```env
+VITE_API_URL=http://localhost:8000
+```
 
-## How can I deploy this project?
+For production, set this to your production API URL.
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+## 🛠️ Development
 
-## Can I connect a custom domain to my Lovable project?
+### Available Scripts
 
-Yes, you can!
+```bash
+npm run dev          # Start development server
+npm run build        # Build for production
+npm run preview      # Preview production build
+npm run lint         # Run ESLint
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+### Tech Stack
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- **React 18** - UI framework
+- **TypeScript** - Type safety
+- **Vite** - Build tool
+- **Tailwind CSS** - Styling
+- **shadcn/ui** - UI components
+- **React Router** - Navigation
+
+## 🔌 API Integration
+
+The frontend communicates with the backend via REST API. All API calls are in `src/lib/api.ts`.
+
+### Authentication
+
+- Uses Bearer tokens stored in localStorage
+- Automatically includes token in API requests
+- Handles token expiration
+
+### Features
+
+- **Chat Interface**: Real-time chat with AI advisor
+- **Multiple Conversations**: Create and manage multiple chat threads
+- **Authentication**: Sign up, login, logout
+- **Community**: Profile creation, matching, connections
+- **Daily Wisdom**: Personalized daily quotes
+
+## 📚 Documentation
+
+- Main project: [../README.md](../README.md)
+- Integration guide: [../INTEGRATION.md](../INTEGRATION.md)
+- Supabase setup: [../SUPABASE_SETUP.md](../SUPABASE_SETUP.md)
+
+## 🐛 Troubleshooting
+
+### Can't connect to API
+
+- Verify backend is running: `curl http://localhost:8000/`
+- Check `VITE_API_URL` in `.env`
+- Check browser console for errors
+
+### CORS errors
+
+- Ensure backend CORS allows `http://localhost:8080`
+- Check backend is running on correct port
+
+### Build errors
+
+- Clear node_modules and reinstall: `rm -rf node_modules && npm install`
+- Check Node.js version: `node --version` (should be 18+)
+
+---
+
+For full setup instructions, see the main [README.md](../README.md).

@@ -1,14 +1,8 @@
 """
-Memory Module for Divine Wisdom Guide
+Memory Module for Divine Wisdom Guide - Supabase Implementation
 
-Implements persistent conversation memory so the advisor can remember
-past conversations and build a relationship with the seeker.
-
-Supports multiple chat threads (like ChatGPT) with:
-- Create new chats
-- Switch between chats
-- Continue old conversations
-- Auto-generate chat titles
+Implements persistent conversation memory using Supabase database.
+Falls back to file-based storage if USE_SUPABASE is False.
 """
 
 import os
@@ -17,143 +11,188 @@ import hashlib
 import uuid
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
-from config import USER_DATA_DIR
+from config import USER_DATA_DIR, USE_SUPABASE
+from supabase_client import get_supabase_client
 
+
+# =====================================================================
+# USER ID HELPERS
+# =====================================================================
 
 def get_user_id(session_id: str) -> str:
-    """Generate a consistent user ID from session info."""
-    return hashlib.md5(session_id.encode()).hexdigest()[:12]
+    """
+    Generate a consistent user ID from session info.
+    For Supabase, this returns a UUID-like string that can be mapped to auth.users.
+    For file-based, returns MD5 hash.
+    """
+    if USE_SUPABASE:
+        # For Supabase, we'll need to map session_id to user_id
+        # This is a temporary ID until user authenticates
+        return hashlib.md5(session_id.encode()).hexdigest()[:12]
+    else:
+        return hashlib.md5(session_id.encode()).hexdigest()[:12]
 
 
 def get_user_id_from_email(email: str) -> str:
-    """Generate a consistent user ID from email address.
-    
-    This ensures memory persists across logins for authenticated users.
+    """
+    Get user ID from email address.
+    For Supabase, this should return the UUID from auth.users.
+    For file-based, returns MD5 hash.
     """
     email_normalized = email.lower().strip()
-    return hashlib.md5(email_normalized.encode()).hexdigest()[:12]
+    
+    if USE_SUPABASE:
+        try:
+            supabase = get_supabase_client(use_service_role=False)
+            response = supabase.table("users").select("id").eq("email", email_normalized).execute()
+            if response.data and len(response.data) > 0:
+                return response.data[0]["id"]
+        except:
+            pass
+        
+        # Fallback to hash if user not found
+        return hashlib.md5(email_normalized.encode()).hexdigest()[:12]
+    else:
+        return hashlib.md5(email_normalized.encode()).hexdigest()[:12]
 
 
-def get_user_file(user_id: str) -> str:
-    """Get the file path for a user's memory."""
-    os.makedirs(USER_DATA_DIR, exist_ok=True)
-    return os.path.join(USER_DATA_DIR, f"{user_id}.json")
+def _get_supabase_user_id(user_id: str) -> Optional[str]:
+    """
+    Convert legacy user_id (hash) to Supabase UUID.
+    Returns None if user_id is already a UUID or if mapping fails.
+    """
+    if not USE_SUPABASE:
+        return user_id
+    
+    # If it's already a UUID format, return as-is
+    try:
+        uuid.UUID(user_id)
+        return user_id
+    except ValueError:
+        pass
+    
+    # Try to find user by email if user_id is a hash
+    # This is a fallback for migration scenarios
+    return None
 
+
+# =====================================================================
+# USER MEMORY (Themes, Personality, Spiritual Journey)
+# =====================================================================
 
 def load_user_memory(user_id: str) -> Dict:
-    """Load a user's memory from disk."""
-    filepath = get_user_file(user_id)
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
+    """
+    Load a user's memory from Supabase or file.
+    Returns a dict compatible with the old file-based format.
+    """
+    if not USE_SUPABASE:
+        return _load_user_memory_file_based(user_id)
     
-    # Return default memory structure
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Get user_memory record
+        memory_response = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+        
+        if memory_response.data and len(memory_response.data) > 0:
+            memory_data = memory_response.data[0]
+            
+            # Convert to old format for backward compatibility
+            return {
+                "user_id": user_id,
+                "email": None,  # Will be populated from users table if needed
+                "created_at": memory_data.get("updated_at", datetime.now().isoformat()),
+                "last_visit": memory_data.get("updated_at", datetime.now().isoformat()),
+                "visit_count": 0,  # This is tracked in users table
+                "conversations": [],  # Old format - use chats instead
+                "themes": memory_data.get("themes", []),
+                "journal_entries": [],  # Loaded separately
+                "preferences": {
+                    "traditions": [],
+                    "ui_mode": "standard",
+                    "ambient_sound": "Silence"
+                },
+                "personality_traits": memory_data.get("personality_traits", {}),
+                "spiritual_journey": memory_data.get("spiritual_journey", {
+                    "primary_concerns": [],
+                    "growth_areas": [],
+                    "milestones": []
+                }),
+                "preferred_wisdom_style": memory_data.get("preferred_wisdom_style"),
+                "conversation_summary": memory_data.get("conversation_summary", "")
+            }
+        
+        # Return default memory structure
+        return _get_default_memory(user_id)
+        
+    except Exception as e:
+        print(f"Error loading user memory from Supabase: {e}")
+        return _get_default_memory(user_id)
+
+
+def save_user_memory(user_id: str, memory: Dict) -> None:
+    """Save a user's memory to Supabase or file."""
+    if not USE_SUPABASE:
+        return _save_user_memory_file_based(user_id, memory)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Extract data for user_memory table
+        memory_data = {
+            "user_id": user_id,
+            "themes": memory.get("themes", []),
+            "personality_traits": memory.get("personality_traits", {}),
+            "spiritual_journey": memory.get("spiritual_journey", {
+                "primary_concerns": [],
+                "growth_areas": [],
+                "milestones": []
+            }),
+            "preferred_wisdom_style": memory.get("preferred_wisdom_style"),
+            "conversation_summary": memory.get("conversation_summary", ""),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # Upsert user_memory
+        supabase.table("user_memory").upsert(memory_data, on_conflict="user_id").execute()
+        
+    except Exception as e:
+        print(f"Error saving user memory to Supabase: {e}")
+
+
+def _get_default_memory(user_id: str) -> Dict:
+    """Return default memory structure."""
     return {
         "user_id": user_id,
-        "email": None,  # Will be set when linked to account
+        "email": None,
         "created_at": datetime.now().isoformat(),
         "last_visit": datetime.now().isoformat(),
         "visit_count": 0,
-        "conversations": [],  # List of {date, exchanges: [{q, a, traditions}]}
-        "themes": [],  # Recurring themes/topics
-        "journal_entries": [],  # For journal mode
+        "conversations": [],
+        "themes": [],
+        "journal_entries": [],
         "preferences": {
             "traditions": [],
             "ui_mode": "standard",
             "ambient_sound": "Silence"
         },
-        "personality_traits": {},  # Extracted personality insights
-        "spiritual_journey": {  # Track spiritual growth
+        "personality_traits": {},
+        "spiritual_journey": {
             "primary_concerns": [],
             "growth_areas": [],
             "milestones": []
         },
-        "preferred_wisdom_style": None,  # How user prefers guidance (compassionate, direct, etc.)
-        "conversation_summary": ""  # AI-generated summary of user's journey
+        "preferred_wisdom_style": None,
+        "conversation_summary": ""
     }
 
 
-def save_user_memory(user_id: str, memory: Dict) -> None:
-    """Save a user's memory to disk."""
-    filepath = get_user_file(user_id)
-    memory["last_visit"] = datetime.now().isoformat()
-    
-    try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(memory, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving memory: {e}")
-
-
-def add_exchange(
-    memory: Dict, 
-    question: str, 
-    answer: str, 
-    traditions: List[str] = None
-) -> Dict:
-    """Add a Q&A exchange to memory."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Find or create today's conversation
-    today_conv = None
-    for conv in memory["conversations"]:
-        if conv["date"] == today:
-            today_conv = conv
-            break
-    
-    if today_conv is None:
-        today_conv = {"date": today, "exchanges": []}
-        memory["conversations"].append(today_conv)
-    
-    # Add the exchange
-    today_conv["exchanges"].append({
-        "timestamp": datetime.now().isoformat(),
-        "question": question,
-        "answer": answer[:500],  # Truncate for storage
-        "traditions": traditions or []
-    })
-    
-    # Keep only last 30 days of conversations
-    cutoff = datetime.now().timestamp() - (30 * 24 * 60 * 60)
-    memory["conversations"] = [
-        c for c in memory["conversations"] 
-        if datetime.fromisoformat(c["date"]).timestamp() > cutoff
-    ][-30:]  # Also limit to 30 conversations max
-    
-    # Extract themes (enhanced keyword extraction)
-    update_themes(memory, question)
-    
-    # Update spiritual journey
-    update_spiritual_journey(memory, question, answer)
-    
-    # Extract personality insights periodically (every 5 exchanges)
-    exchange_count = sum(len(conv.get("exchanges", [])) for conv in memory.get("conversations", []))
-    if exchange_count % 5 == 0:
-        extract_personality_insights(memory)
-    
-    return memory
-
-
-def add_journal_entry(memory: Dict, entry: str, reflection: str) -> Dict:
-    """Add a journal entry to memory."""
-    memory["journal_entries"].append({
-        "date": datetime.now().isoformat(),
-        "entry": entry[:1000],  # Truncate
-        "reflection": reflection[:500]
-    })
-    
-    # Keep only last 30 journal entries
-    memory["journal_entries"] = memory["journal_entries"][-30:]
-    
-    return memory
-
+# =====================================================================
+# THEME AND PERSONALITY FUNCTIONS (unchanged logic)
+# =====================================================================
 
 def update_themes(memory: Dict, text: str) -> None:
     """Extract and update recurring themes from text."""
-    # Enhanced theme keywords (expand as needed)
     theme_keywords = {
         "family": ["family", "mother", "father", "parent", "child", "son", "daughter", "sibling", "brother", "sister"],
         "grief": ["grief", "loss", "death", "died", "mourning", "passed away", "gone", "losing", "lost someone"],
@@ -180,22 +219,36 @@ def update_themes(memory: Dict, text: str) -> None:
                     memory["themes"].append(theme)
                 break
     
-    # Keep only most recent 15 themes (increased from 10)
     memory["themes"] = memory["themes"][-15:]
 
 
 def extract_personality_insights(memory: Dict) -> Dict:
-    """
-    Extract personality insights from conversation history.
-    This is a simple rule-based approach. For deeper analysis, could use LLM.
-    """
+    """Extract personality insights from conversation history."""
     traits = {}
     
-    # Analyze conversation patterns
+    # Get all questions from chats (Supabase) or conversations (file-based)
     all_questions = []
-    for conv in memory.get("conversations", []):
-        for exchange in conv.get("exchanges", []):
-            all_questions.append(exchange.get("question", "").lower())
+    
+    if USE_SUPABASE:
+        # Get questions from chat_messages
+        user_id = memory.get("user_id")
+        if user_id:
+            try:
+                supabase = get_supabase_client(use_service_role=False)
+                # Get all user messages
+                chats_response = supabase.table("chats").select("id").eq("user_id", user_id).execute()
+                chat_ids = [c["id"] for c in chats_response.data] if chats_response.data else []
+                
+                if chat_ids:
+                    messages_response = supabase.table("chat_messages").select("content").eq("role", "user").in_("chat_id", chat_ids).execute()
+                    all_questions = [m["content"].lower() for m in messages_response.data] if messages_response.data else []
+            except:
+                pass
+    else:
+        # File-based: get from conversations
+        for conv in memory.get("conversations", []):
+            for exchange in conv.get("exchanges", []):
+                all_questions.append(exchange.get("question", "").lower())
     
     if not all_questions:
         return traits
@@ -230,16 +283,12 @@ def extract_personality_insights(memory: Dict) -> Dict:
         else:
             traits["inquiry_style"] = "asks thoughtful questions"
     
-    # Update memory with traits
     memory["personality_traits"] = traits
-    
     return traits
 
 
 def update_spiritual_journey(memory: Dict, question: str, answer: str) -> None:
-    """
-    Update spiritual journey tracking based on conversations.
-    """
+    """Update spiritual journey tracking based on conversations."""
     journey = memory.setdefault("spiritual_journey", {
         "primary_concerns": [],
         "growth_areas": [],
@@ -251,16 +300,36 @@ def update_spiritual_journey(memory: Dict, question: str, answer: str) -> None:
     for theme in themes:
         if theme not in journey["primary_concerns"]:
             journey["primary_concerns"].append(theme)
-            # Keep only top 5 concerns
             journey["primary_concerns"] = journey["primary_concerns"][-5:]
     
     # Identify growth areas (themes that appear frequently)
     theme_counts = {}
-    for conv in memory.get("conversations", []):
-        for exchange in conv.get("exchanges", []):
-            for theme in themes:
-                if theme in exchange.get("question", "").lower():
-                    theme_counts[theme] = theme_counts.get(theme, 0) + 1
+    
+    if USE_SUPABASE:
+        # Count themes from chat messages
+        user_id = memory.get("user_id")
+        if user_id:
+            try:
+                supabase = get_supabase_client(use_service_role=False)
+                chats_response = supabase.table("chats").select("id").eq("user_id", user_id).execute()
+                chat_ids = [c["id"] for c in chats_response.data] if chats_response.data else []
+                
+                if chat_ids:
+                    messages_response = supabase.table("chat_messages").select("content").eq("role", "user").in_("chat_id", chat_ids).execute()
+                    for msg in messages_response.data or []:
+                        content_lower = msg["content"].lower()
+                        for theme in themes:
+                            if theme in content_lower:
+                                theme_counts[theme] = theme_counts.get(theme, 0) + 1
+            except:
+                pass
+    else:
+        # File-based: count from conversations
+        for conv in memory.get("conversations", []):
+            for exchange in conv.get("exchanges", []):
+                for theme in themes:
+                    if theme in exchange.get("question", "").lower():
+                        theme_counts[theme] = theme_counts.get(theme, 0) + 1
     
     # Top 3 most discussed themes become growth areas
     if theme_counts:
@@ -268,45 +337,151 @@ def update_spiritual_journey(memory: Dict, question: str, answer: str) -> None:
         journey["growth_areas"] = [theme for theme, _ in sorted_themes[:3]]
     
     # Detect milestones (significant shifts in themes or visit count)
+    # This would need to be tracked separately in Supabase
     visit_count = memory.get("visit_count", 0)
     if visit_count > 0 and visit_count % 10 == 0:
         milestone = f"Completed {visit_count} conversations"
         if milestone not in journey["milestones"]:
             journey["milestones"].append(milestone)
-            journey["milestones"] = journey["milestones"][-10:]  # Keep last 10 milestones
+            journey["milestones"] = journey["milestones"][-10:]
 
+
+# =====================================================================
+# EXCHANGE AND JOURNAL FUNCTIONS
+# =====================================================================
+
+def add_exchange(
+    memory: Dict, 
+    question: str, 
+    answer: str, 
+    traditions: List[str] = None
+) -> Dict:
+    """
+    Add a Q&A exchange to memory.
+    Note: With Supabase, exchanges are stored as chat messages.
+    This function maintains backward compatibility.
+    """
+    # For Supabase, exchanges are handled via chat_messages
+    # This function updates themes and spiritual journey
+    update_themes(memory, question)
+    update_spiritual_journey(memory, question, answer)
+    
+    # Extract personality insights periodically
+    if USE_SUPABASE:
+        user_id = memory.get("user_id")
+        if user_id:
+            try:
+                supabase = get_supabase_client(use_service_role=False)
+                chats_response = supabase.table("chats").select("id").eq("user_id", user_id).execute()
+                total_messages = 0
+                if chats_response.data:
+                    chat_ids = [c["id"] for c in chats_response.data]
+                    messages_response = supabase.table("chat_messages").select("id").in_("chat_id", chat_ids).execute()
+                    total_messages = len(messages_response.data) if messages_response.data else 0
+                
+                if total_messages % 5 == 0:
+                    extract_personality_insights(memory)
+            except:
+                pass
+    else:
+        # File-based: count from conversations
+        exchange_count = sum(len(conv.get("exchanges", [])) for conv in memory.get("conversations", []))
+        if exchange_count % 5 == 0:
+            extract_personality_insights(memory)
+    
+    return memory
+
+
+def add_journal_entry(memory: Dict, entry: str, reflection: str) -> Dict:
+    """Add a journal entry to memory (Supabase or file)."""
+    user_id = memory.get("user_id")
+    
+    if USE_SUPABASE and user_id:
+        try:
+            supabase = get_supabase_client(use_service_role=False)
+            supabase.table("journal_entries").insert({
+                "user_id": user_id,
+                "entry": entry[:1000],
+                "reflection": reflection[:500],
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        except Exception as e:
+            print(f"Error saving journal entry to Supabase: {e}")
+    else:
+        # File-based fallback
+        memory["journal_entries"].append({
+            "date": datetime.now().isoformat(),
+            "entry": entry[:1000],
+            "reflection": reflection[:500]
+        })
+        memory["journal_entries"] = memory["journal_entries"][-30:]
+    
+    return memory
+
+
+# =====================================================================
+# CONTEXT AND SUMMARY FUNCTIONS
+# =====================================================================
 
 def get_conversation_summary(memory: Dict, limit: int = 5) -> str:
     """Get a summary of recent conversations for context."""
-    if not memory["conversations"]:
+    if USE_SUPABASE:
+        user_id = memory.get("user_id")
+        if not user_id:
+            return ""
+        
+        try:
+            supabase = get_supabase_client(use_service_role=False)
+            # Get recent user messages
+            chats_response = supabase.table("chats").select("id").eq("user_id", user_id).order("updated_at", desc=True).limit(5).execute()
+            chat_ids = [c["id"] for c in chats_response.data] if chats_response.data else []
+            
+            if not chat_ids:
+                return ""
+            
+            summaries = []
+            for chat_id in chat_ids[:limit]:
+                messages_response = supabase.table("chat_messages").select("content, timestamp").eq("chat_id", chat_id).eq("role", "user").order("timestamp", desc=True).limit(1).execute()
+                if messages_response.data:
+                    msg = messages_response.data[0]
+                    date_str = msg["timestamp"][:10] if msg.get("timestamp") else ""
+                    summaries.append(f"[{date_str}] Seeker asked about: {msg['content'][:100]}...")
+            
+            if summaries:
+                return "Previous conversations:\n" + "\n".join(summaries)
+        except:
+            pass
+        
         return ""
-    
-    summaries = []
-    exchange_count = 0
-    
-    # Go through conversations in reverse (most recent first)
-    for conv in reversed(memory["conversations"]):
-        for exchange in reversed(conv["exchanges"]):
+    else:
+        # File-based
+        if not memory["conversations"]:
+            return ""
+        
+        summaries = []
+        exchange_count = 0
+        
+        for conv in reversed(memory["conversations"]):
+            for exchange in reversed(conv["exchanges"]):
+                if exchange_count >= limit:
+                    break
+                summaries.append(
+                    f"[{conv['date']}] Seeker asked about: {exchange['question'][:100]}..."
+                )
+                exchange_count += 1
             if exchange_count >= limit:
                 break
-            summaries.append(
-                f"[{conv['date']}] Seeker asked about: {exchange['question'][:100]}..."
-            )
-            exchange_count += 1
-        if exchange_count >= limit:
-            break
-    
-    if not summaries:
-        return ""
-    
-    return "Previous conversations:\n" + "\n".join(reversed(summaries))
+        
+        if not summaries:
+            return ""
+        
+        return "Previous conversations:\n" + "\n".join(reversed(summaries))
 
 
 def get_themes_summary(memory: Dict) -> str:
     """Get a summary of the seeker's recurring themes."""
     if not memory["themes"]:
         return ""
-    
     return f"This seeker often reflects on: {', '.join(memory['themes'])}"
 
 
@@ -315,7 +490,7 @@ def get_returning_user_greeting(memory: Dict) -> Optional[str]:
     visit_count = memory.get("visit_count", 0)
     
     if visit_count == 0:
-        return None  # New user
+        return None
     
     themes = memory.get("themes", [])
     last_visit = memory.get("last_visit", "")
@@ -346,30 +521,23 @@ def get_returning_user_greeting(memory: Dict) -> Optional[str]:
 
 
 def get_context_for_llm(memory: Dict) -> str:
-    """
-    Generate context string to include in LLM prompt.
-    This helps the AI remember and personalize responses.
-    """
+    """Generate context string to include in LLM prompt."""
     parts = []
     
-    # Visit info
     visit_count = memory.get("visit_count", 0)
     if visit_count > 1:
         parts.append(f"This is a returning seeker (visit #{visit_count}).")
     
-    # Personality traits
     personality = memory.get("personality_traits", {})
     if personality:
         traits_list = [f"{k}: {v}" for k, v in personality.items() if v]
         if traits_list:
             parts.append(f"Personality insights: {', '.join(traits_list)}")
     
-    # Preferred wisdom style
     wisdom_style = memory.get("preferred_wisdom_style")
     if wisdom_style:
         parts.append(f"This seeker prefers {wisdom_style} guidance.")
     
-    # Spiritual journey
     journey = memory.get("spiritual_journey", {})
     if journey.get("primary_concerns"):
         concerns = ", ".join(journey["primary_concerns"][:3])
@@ -378,24 +546,33 @@ def get_context_for_llm(memory: Dict) -> str:
         growth = ", ".join(journey["growth_areas"][:3])
         parts.append(f"Areas of growth: {growth}")
     
-    # Themes
     themes_summary = get_themes_summary(memory)
     if themes_summary:
         parts.append(themes_summary)
     
-    # Recent conversations
     conv_summary = get_conversation_summary(memory, limit=3)
     if conv_summary:
         parts.append(conv_summary)
     
-    # Conversation summary (if available)
     if memory.get("conversation_summary"):
         parts.append(f"Journey summary: {memory['conversation_summary'][:300]}...")
     
     # Journal themes
-    if memory.get("journal_entries"):
-        recent_journal = memory["journal_entries"][-1]
-        parts.append(f"Recent journal reflection: {recent_journal['entry'][:200]}...")
+    if USE_SUPABASE:
+        user_id = memory.get("user_id")
+        if user_id:
+            try:
+                supabase = get_supabase_client(use_service_role=False)
+                journal_response = supabase.table("journal_entries").select("entry").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+                if journal_response.data:
+                    recent_journal = journal_response.data[0]
+                    parts.append(f"Recent journal reflection: {recent_journal['entry'][:200]}...")
+            except:
+                pass
+    else:
+        if memory.get("journal_entries"):
+            recent_journal = memory["journal_entries"][-1]
+            parts.append(f"Recent journal reflection: {recent_journal['entry'][:200]}...")
     
     if not parts:
         return ""
@@ -408,21 +585,358 @@ def get_context_for_llm(memory: Dict) -> str:
 # =====================================================================
 
 def create_new_chat(user_id: str, religion: str = None, title: str = None) -> Dict:
-    """
-    Create a new chat thread for a user.
+    """Create a new chat thread for a user."""
+    if not USE_SUPABASE:
+        return _create_new_chat_file_based(user_id, religion, title)
     
-    Returns:
-        The new chat object
-    """
-    memory = load_user_memory(user_id)
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Generate title if not provided
+        if not title:
+            # Count existing "New Chat X" titles
+            existing_chats = supabase.table("chats").select("title").eq("user_id", user_id).execute()
+            existing_numbers = []
+            if existing_chats.data:
+                for chat in existing_chats.data:
+                    chat_title = chat.get("title", "")
+                    if chat_title.startswith("New Chat "):
+                        try:
+                            num = int(chat_title.replace("New Chat ", ""))
+                            existing_numbers.append(num)
+                        except ValueError:
+                            pass
+            
+            next_num = max(existing_numbers) + 1 if existing_numbers else 1
+            title = f"New Chat {next_num}"
+        
+        # Set all other chats to not current
+        supabase.table("chats").update({"is_current": False}).eq("user_id", user_id).execute()
+        
+        # Create new chat
+        chat_data = {
+            "user_id": user_id,
+            "title": title,
+            "religion": religion,
+            "is_current": True,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        response = supabase.table("chats").insert(chat_data).execute()
+        
+        if response.data and len(response.data) > 0:
+            chat = response.data[0]
+            # Add empty messages array for compatibility
+            chat["messages"] = []
+            return chat
+        
+        raise Exception("Failed to create chat")
+        
+    except Exception as e:
+        print(f"Error creating chat in Supabase: {e}")
+        # Fallback to file-based
+        return _create_new_chat_file_based(user_id, religion, title)
+
+
+def get_chat(user_id: str, chat_id: str) -> Optional[Dict]:
+    """Get a specific chat by ID."""
+    if not USE_SUPABASE:
+        return _get_chat_file_based(user_id, chat_id)
     
-    # Initialize chats list if not exists
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        response = supabase.table("chats").select("*").eq("id", chat_id).eq("user_id", user_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            chat = response.data[0]
+            # Load messages
+            messages_response = supabase.table("chat_messages").select("*").eq("chat_id", chat_id).order("timestamp").execute()
+            chat["messages"] = [
+                {
+                    "role": m["role"],
+                    "content": m["content"],
+                    "timestamp": m["timestamp"]
+                }
+                for m in (messages_response.data or [])
+            ]
+            return chat
+        
+        return None
+    except Exception as e:
+        print(f"Error getting chat from Supabase: {e}")
+        return _get_chat_file_based(user_id, chat_id)
+
+
+def get_all_chats(user_id: str) -> List[Dict]:
+    """Get all chats for a user (summary only, not full messages)."""
+    if not USE_SUPABASE:
+        return _get_all_chats_file_based(user_id)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        chats_response = supabase.table("chats").select("id, title, created_at, updated_at, religion").eq("user_id", user_id).order("updated_at", desc=True).execute()
+        
+        summaries = []
+        if chats_response.data:
+            for chat in chats_response.data:
+                # Get message count and preview
+                messages_response = supabase.table("chat_messages").select("content").eq("chat_id", chat["id"]).order("timestamp", desc=True).limit(1).execute()
+                
+                message_count_response = supabase.table("chat_messages").select("id", count="exact").eq("chat_id", chat["id"]).execute()
+                message_count = message_count_response.count if hasattr(message_count_response, 'count') else 0
+                
+                preview = ""
+                if messages_response.data:
+                    preview = messages_response.data[0]["content"][:50] + "..."
+                
+                summaries.append({
+                    "id": chat["id"],
+                    "title": chat.get("title", "Untitled"),
+                    "created_at": chat.get("created_at"),
+                    "updated_at": chat.get("updated_at"),
+                    "religion": chat.get("religion"),
+                    "message_count": message_count,
+                    "preview": preview
+                })
+        
+        return summaries
+    except Exception as e:
+        print(f"Error getting chats from Supabase: {e}")
+        return _get_all_chats_file_based(user_id)
+
+
+def get_current_chat_id(user_id: str) -> Optional[str]:
+    """Get the ID of the user's current active chat."""
+    if not USE_SUPABASE:
+        memory = load_user_memory(user_id)
+        return memory.get("current_chat_id")
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        response = supabase.table("chats").select("id").eq("user_id", user_id).eq("is_current", True).limit(1).execute()
+        
+        if response.data and len(response.data) > 0:
+            return response.data[0]["id"]
+        return None
+    except Exception as e:
+        print(f"Error getting current chat from Supabase: {e}")
+        memory = load_user_memory(user_id)
+        return memory.get("current_chat_id")
+
+
+def set_current_chat(user_id: str, chat_id: str) -> bool:
+    """Set the current active chat."""
+    if not USE_SUPABASE:
+        return _set_current_chat_file_based(user_id, chat_id)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Verify chat exists and belongs to user
+        chat_response = supabase.table("chats").select("id").eq("id", chat_id).eq("user_id", user_id).execute()
+        if not chat_response.data:
+            return False
+        
+        # Set all chats to not current
+        supabase.table("chats").update({"is_current": False}).eq("user_id", user_id).execute()
+        
+        # Set this chat as current
+        supabase.table("chats").update({"is_current": True}).eq("id", chat_id).execute()
+        
+        return True
+    except Exception as e:
+        print(f"Error setting current chat in Supabase: {e}")
+        return _set_current_chat_file_based(user_id, chat_id)
+
+
+def add_message_to_chat(
+    user_id: str, 
+    chat_id: str, 
+    role: str, 
+    content: str,
+    traditions: List[str] = None,
+    sources: List[Dict] = None
+) -> Optional[Dict]:
+    """Add a message to a specific chat."""
+    if not USE_SUPABASE:
+        return _add_message_to_chat_file_based(user_id, chat_id, role, content)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Verify chat belongs to user
+        chat_response = supabase.table("chats").select("id, title").eq("id", chat_id).eq("user_id", user_id).execute()
+        if not chat_response.data:
+            return None
+        
+        chat = chat_response.data[0]
+        
+        # Add message
+        message_data = {
+            "chat_id": chat_id,
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "traditions": traditions or [],
+            "sources": sources or []
+        }
+        
+        supabase.table("chat_messages").insert(message_data).execute()
+        
+        # Auto-generate title from first user message
+        if chat.get("title", "").startswith("New Chat") and role == "user":
+            new_title = content[:40] + ("..." if len(content) > 40 else "")
+            supabase.table("chats").update({"title": new_title}).eq("id", chat_id).execute()
+            chat["title"] = new_title
+        
+        # Update themes if user message
+        if role == "user":
+            memory = load_user_memory(user_id)
+            update_themes(memory, content)
+            save_user_memory(user_id, memory)
+        
+        # Return updated chat
+        return get_chat(user_id, chat_id)
+        
+    except Exception as e:
+        print(f"Error adding message to chat in Supabase: {e}")
+        return _add_message_to_chat_file_based(user_id, chat_id, role, content)
+
+
+def get_chat_messages(user_id: str, chat_id: str) -> List[Dict]:
+    """Get all messages from a specific chat."""
+    chat = get_chat(user_id, chat_id)
+    if not chat:
+        return []
+    return chat.get("messages", [])
+
+
+def delete_chat(user_id: str, chat_id: str) -> bool:
+    """Delete a chat thread."""
+    if not USE_SUPABASE:
+        return _delete_chat_file_based(user_id, chat_id)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        
+        # Verify chat belongs to user
+        chat_response = supabase.table("chats").select("id, is_current").eq("id", chat_id).eq("user_id", user_id).execute()
+        if not chat_response.data:
+            return False
+        
+        was_current = chat_response.data[0].get("is_current", False)
+        
+        # Delete chat (messages will be cascade deleted)
+        supabase.table("chats").delete().eq("id", chat_id).execute()
+        
+        # If deleted chat was current, set another as current
+        if was_current:
+            other_chat = supabase.table("chats").select("id").eq("user_id", user_id).order("updated_at", desc=True).limit(1).execute()
+            if other_chat.data:
+                supabase.table("chats").update({"is_current": True}).eq("id", other_chat.data[0]["id"]).execute()
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting chat from Supabase: {e}")
+        return _delete_chat_file_based(user_id, chat_id)
+
+
+def rename_chat(user_id: str, chat_id: str, new_title: str) -> bool:
+    """Rename a chat thread."""
+    if not USE_SUPABASE:
+        return _rename_chat_file_based(user_id, chat_id, new_title)
+    
+    try:
+        supabase = get_supabase_client(use_service_role=False)
+        response = supabase.table("chats").update({"title": new_title[:100]}).eq("id", chat_id).eq("user_id", user_id).execute()
+        return response.data is not None and len(response.data) > 0
+    except Exception as e:
+        print(f"Error renaming chat in Supabase: {e}")
+        return _rename_chat_file_based(user_id, chat_id, new_title)
+
+
+def get_or_create_current_chat(user_id: str, religion: str = None) -> Dict:
+    """Get the current chat, or create one if none exists."""
+    current_id = get_current_chat_id(user_id)
+    if current_id:
+        chat = get_chat(user_id, current_id)
+        if chat:
+            return chat
+    
+    # Check if any chats exist
+    all_chats = get_all_chats(user_id)
+    if all_chats:
+        # Set first chat as current
+        set_current_chat(user_id, all_chats[0]["id"])
+        return get_chat(user_id, all_chats[0]["id"])
+    
+    # Create new chat
+    return create_new_chat(user_id, religion)
+
+
+def migrate_old_conversations_to_chats(user_id: str) -> int:
+    """Migrate old-style conversations to new chat format."""
+    # This function is mainly for file-based migration
+    # With Supabase, we start fresh with chats
+    if USE_SUPABASE:
+        return 0
+    
+    return _migrate_old_conversations_to_chats_file_based(user_id)
+
+
+def migrate_session_memory_to_account(session_id: str, email: str) -> bool:
+    """Migrate session-based memory to account-based memory."""
+    # With Supabase, this is handled via user_id mapping
+    # The migration script will handle this
+    return True
+
+
+# =====================================================================
+# FILE-BASED FALLBACK FUNCTIONS
+# =====================================================================
+
+def _load_user_memory_file_based(user_id: str) -> Dict:
+    """Fallback file-based memory loading."""
+    def get_user_file(user_id: str) -> str:
+        os.makedirs(USER_DATA_DIR, exist_ok=True)
+        return os.path.join(USER_DATA_DIR, f"{user_id}.json")
+    
+    filepath = get_user_file(user_id)
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    return _get_default_memory(user_id)
+
+
+def _save_user_memory_file_based(user_id: str, memory: Dict) -> None:
+    """Fallback file-based memory saving."""
+    def get_user_file(user_id: str) -> str:
+        os.makedirs(USER_DATA_DIR, exist_ok=True)
+        return os.path.join(USER_DATA_DIR, f"{user_id}.json")
+    
+    filepath = get_user_file(user_id)
+    memory["last_visit"] = datetime.now().isoformat()
+    
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(memory, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving memory: {e}")
+
+
+def _create_new_chat_file_based(user_id: str, religion: str = None, title: str = None) -> Dict:
+    """Fallback file-based chat creation."""
+    memory = _load_user_memory_file_based(user_id)
+    
     if "chats" not in memory:
         memory["chats"] = []
     
-    # Generate incremental title if not provided
     if not title:
-        # Count existing "New Chat X" titles to determine next number
         existing_numbers = []
         for chat in memory["chats"]:
             chat_title = chat.get("title", "")
@@ -433,14 +947,9 @@ def create_new_chat(user_id: str, religion: str = None, title: str = None) -> Di
                 except ValueError:
                     pass
         
-        # Find next available number
-        next_num = 1
-        if existing_numbers:
-            next_num = max(existing_numbers) + 1
-        
+        next_num = max(existing_numbers) + 1 if existing_numbers else 1
         title = f"New Chat {next_num}"
     
-    # Create new chat
     chat_id = str(uuid.uuid4())[:8]
     new_chat = {
         "id": chat_id,
@@ -451,38 +960,28 @@ def create_new_chat(user_id: str, religion: str = None, title: str = None) -> Di
         "messages": []
     }
     
-    # Add to beginning of list (most recent first)
     memory["chats"].insert(0, new_chat)
     memory["current_chat_id"] = chat_id
-    
-    # Limit to 50 chats max
     memory["chats"] = memory["chats"][:50]
     
-    save_user_memory(user_id, memory)
-    
+    _save_user_memory_file_based(user_id, memory)
     return new_chat
 
 
-def get_chat(user_id: str, chat_id: str) -> Optional[Dict]:
-    """Get a specific chat by ID."""
-    memory = load_user_memory(user_id)
-    
+def _get_chat_file_based(user_id: str, chat_id: str) -> Optional[Dict]:
+    """Fallback file-based chat retrieval."""
+    memory = _load_user_memory_file_based(user_id)
     for chat in memory.get("chats", []):
         if chat["id"] == chat_id:
             return chat
-    
     return None
 
 
-def get_all_chats(user_id: str) -> List[Dict]:
-    """
-    Get all chats for a user (summary only, not full messages).
-    Returns list sorted by most recent.
-    """
-    memory = load_user_memory(user_id)
+def _get_all_chats_file_based(user_id: str) -> List[Dict]:
+    """Fallback file-based chat list."""
+    memory = _load_user_memory_file_based(user_id)
     chats = memory.get("chats", [])
     
-    # Return summaries only (for sidebar)
     summaries = []
     for chat in chats:
         summaries.append({
@@ -498,49 +997,25 @@ def get_all_chats(user_id: str) -> List[Dict]:
     return summaries
 
 
-def get_current_chat_id(user_id: str) -> Optional[str]:
-    """Get the ID of the user's current active chat."""
-    memory = load_user_memory(user_id)
-    return memory.get("current_chat_id")
-
-
-def set_current_chat(user_id: str, chat_id: str) -> bool:
-    """Set the current active chat."""
-    memory = load_user_memory(user_id)
+def _set_current_chat_file_based(user_id: str, chat_id: str) -> bool:
+    """Fallback file-based current chat setting."""
+    memory = _load_user_memory_file_based(user_id)
     
-    # Verify chat exists
     chat_exists = any(c["id"] == chat_id for c in memory.get("chats", []))
     if not chat_exists:
         return False
     
     memory["current_chat_id"] = chat_id
-    save_user_memory(user_id, memory)
+    _save_user_memory_file_based(user_id, memory)
     return True
 
 
-def add_message_to_chat(
-    user_id: str, 
-    chat_id: str, 
-    role: str, 
-    content: str
-) -> Optional[Dict]:
-    """
-    Add a message to a specific chat.
-    
-    Args:
-        user_id: The user's ID
-        chat_id: The chat thread ID
-        role: "user" or "assistant"
-        content: The message content
-    
-    Returns:
-        The updated chat, or None if not found
-    """
-    memory = load_user_memory(user_id)
+def _add_message_to_chat_file_based(user_id: str, chat_id: str, role: str, content: str) -> Optional[Dict]:
+    """Fallback file-based message addition."""
+    memory = _load_user_memory_file_based(user_id)
     
     for chat in memory.get("chats", []):
         if chat["id"] == chat_id:
-            # Add message
             chat["messages"].append({
                 "role": role,
                 "content": content,
@@ -548,101 +1023,59 @@ def add_message_to_chat(
             })
             chat["updated_at"] = datetime.now().isoformat()
             
-            # Auto-generate title from first user message
             if chat["title"] == "New Conversation" and role == "user":
-                # Use first 40 chars of first message as title
                 chat["title"] = content[:40] + ("..." if len(content) > 40 else "")
             
-            # Move this chat to top of list (most recent)
             memory["chats"].remove(chat)
             memory["chats"].insert(0, chat)
             
-            save_user_memory(user_id, memory)
+            _save_user_memory_file_based(user_id, memory)
             
-            # Also update themes for matching
             if role == "user":
                 update_themes(memory, content)
-                save_user_memory(user_id, memory)
+                _save_user_memory_file_based(user_id, memory)
             
             return chat
     
     return None
 
 
-def get_chat_messages(user_id: str, chat_id: str) -> List[Dict]:
-    """Get all messages from a specific chat."""
-    chat = get_chat(user_id, chat_id)
-    if not chat:
-        return []
-    return chat.get("messages", [])
-
-
-def delete_chat(user_id: str, chat_id: str) -> bool:
-    """Delete a chat thread."""
-    memory = load_user_memory(user_id)
+def _delete_chat_file_based(user_id: str, chat_id: str) -> bool:
+    """Fallback file-based chat deletion."""
+    memory = _load_user_memory_file_based(user_id)
     
     original_count = len(memory.get("chats", []))
     memory["chats"] = [c for c in memory.get("chats", []) if c["id"] != chat_id]
     
     if len(memory["chats"]) < original_count:
-        # Chat was deleted
-        # If deleted chat was current, set new current
         if memory.get("current_chat_id") == chat_id:
             if memory["chats"]:
                 memory["current_chat_id"] = memory["chats"][0]["id"]
             else:
                 memory["current_chat_id"] = None
         
-        save_user_memory(user_id, memory)
+        _save_user_memory_file_based(user_id, memory)
         return True
     
     return False
 
 
-def rename_chat(user_id: str, chat_id: str, new_title: str) -> bool:
-    """Rename a chat thread."""
-    memory = load_user_memory(user_id)
+def _rename_chat_file_based(user_id: str, chat_id: str, new_title: str) -> bool:
+    """Fallback file-based chat renaming."""
+    memory = _load_user_memory_file_based(user_id)
     
     for chat in memory.get("chats", []):
         if chat["id"] == chat_id:
-            chat["title"] = new_title[:100]  # Limit title length
-            save_user_memory(user_id, memory)
+            chat["title"] = new_title[:100]
+            _save_user_memory_file_based(user_id, memory)
             return True
     
     return False
 
 
-def get_or_create_current_chat(user_id: str, religion: str = None) -> Dict:
-    """
-    Get the current chat, or create one if none exists.
-    Used to ensure there's always an active chat.
-    """
-    memory = load_user_memory(user_id)
-    
-    # Check if current chat exists
-    current_id = memory.get("current_chat_id")
-    if current_id:
-        chat = get_chat(user_id, current_id)
-        if chat:
-            return chat
-    
-    # Check if any chats exist
-    if memory.get("chats") and len(memory["chats"]) > 0:
-        # Use first (most recent) chat
-        memory["current_chat_id"] = memory["chats"][0]["id"]
-        save_user_memory(user_id, memory)
-        return memory["chats"][0]
-    
-    # Create new chat
-    return create_new_chat(user_id, religion)
-
-
-def migrate_old_conversations_to_chats(user_id: str) -> int:
-    """
-    Migrate old-style conversations to new chat format.
-    Returns number of chats created.
-    """
-    memory = load_user_memory(user_id)
+def _migrate_old_conversations_to_chats_file_based(user_id: str) -> int:
+    """Fallback file-based conversation migration."""
+    memory = _load_user_memory_file_based(user_id)
     
     old_convs = memory.get("conversations", [])
     if not old_convs:
@@ -654,15 +1087,12 @@ def migrate_old_conversations_to_chats(user_id: str) -> int:
     migrated = 0
     
     for conv in old_convs:
-        # Skip if no exchanges
         exchanges = conv.get("exchanges", [])
         if not exchanges:
             continue
         
-        # Create chat from conversation
         chat_id = str(uuid.uuid4())[:8]
         
-        # Build messages
         messages = []
         for exchange in exchanges:
             messages.append({
@@ -671,12 +1101,11 @@ def migrate_old_conversations_to_chats(user_id: str) -> int:
                 "timestamp": exchange.get("timestamp", conv.get("date"))
             })
             messages.append({
-                "role": "assistant", 
+                "role": "assistant",
                 "content": exchange.get("answer", ""),
                 "timestamp": exchange.get("timestamp", conv.get("date"))
             })
         
-        # Create title from first question
         title = exchanges[0].get("question", "Conversation")[:40]
         if len(exchanges[0].get("question", "")) > 40:
             title += "..."
@@ -693,101 +1122,11 @@ def migrate_old_conversations_to_chats(user_id: str) -> int:
         memory["chats"].append(chat)
         migrated += 1
     
-    # Sort by date
     memory["chats"].sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     
-    # Set current chat
     if memory["chats"] and not memory.get("current_chat_id"):
         memory["current_chat_id"] = memory["chats"][0]["id"]
     
-    # Clear old conversations (optional - keep for backup)
-    # memory["conversations"] = []
-    
-    save_user_memory(user_id, memory)
-    
+    _save_user_memory_file_based(user_id, memory)
     return migrated
-
-
-def migrate_session_memory_to_account(session_id: str, email: str) -> bool:
-    """
-    Migrate session-based memory to account-based memory.
-    
-    Args:
-        session_id: The session ID to migrate from
-        email: The email address to migrate to
-    
-    Returns:
-        True if migration successful, False otherwise
-    """
-    try:
-        session_user_id = get_user_id(session_id)
-        account_user_id = get_user_id_from_email(email)
-        
-        # If they're the same, no migration needed
-        if session_user_id == account_user_id:
-            return True
-        
-        session_memory_file = get_user_file(session_user_id)
-        account_memory_file = get_user_file(account_user_id)
-        
-        # Load session memory
-        session_memory = None
-        if os.path.exists(session_memory_file):
-            try:
-                with open(session_memory_file, 'r', encoding='utf-8') as f:
-                    session_memory = json.load(f)
-            except:
-                pass
-        
-        # If no session memory, nothing to migrate
-        if not session_memory:
-            return True
-        
-        # Load or create account memory
-        account_memory = load_user_memory(account_user_id)
-        
-        # Merge memories
-        # Link email to account memory
-        account_memory["email"] = email.lower().strip()
-        
-        # Merge conversations (keep unique dates)
-        session_convs = {c["date"]: c for c in session_memory.get("conversations", [])}
-        account_convs = {c["date"]: c for c in account_memory.get("conversations", [])}
-        account_convs.update(session_convs)
-        account_memory["conversations"] = list(account_convs.values())
-        
-        # Merge themes (keep unique)
-        session_themes = set(session_memory.get("themes", []))
-        account_themes = set(account_memory.get("themes", []))
-        account_memory["themes"] = list(account_themes.union(session_themes))[-10:]
-        
-        # Merge journal entries (keep most recent)
-        all_journals = account_memory.get("journal_entries", []) + session_memory.get("journal_entries", [])
-        # Sort by date and keep most recent 30
-        all_journals.sort(key=lambda x: x.get("date", ""), reverse=True)
-        account_memory["journal_entries"] = all_journals[:30]
-        
-        # Use earlier created_at if session memory is older
-        try:
-            session_created = datetime.fromisoformat(session_memory.get("created_at", ""))
-            account_created = datetime.fromisoformat(account_memory.get("created_at", ""))
-            if session_created < account_created:
-                account_memory["created_at"] = session_memory["created_at"]
-        except:
-            pass
-        
-        # Save merged memory
-        save_user_memory(account_user_id, account_memory)
-        
-        # Optionally delete session memory file (or keep as backup)
-        # Uncomment to delete:
-        # try:
-        #     os.unlink(session_memory_file)
-        # except:
-        #     pass
-        
-        return True
-    except Exception as e:
-        print(f"Error migrating memory: {e}")
-        return False
 

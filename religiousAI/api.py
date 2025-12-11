@@ -1143,7 +1143,7 @@ async def create_community_profile(
     email = get_email_from_auth(authorization)
     
     # Get user's conversation themes for trait extraction
-    user_id = get_user_id(email)
+    user_id = get_user_id_from_email(email)
     user_memory = load_user_memory(user_id)
     
     themes = user_memory.get("themes", [])

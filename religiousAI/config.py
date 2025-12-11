@@ -120,3 +120,8 @@ STT_MODEL = "base"  # Whisper model: tiny, base, small, medium, large
 # ----------------------- Safety Settings -----------------------
 ENABLE_CRISIS_DETECTION = True
 SHOW_HUMILITY_REMINDER_EVERY = 10  # messages
+
+# ----------------------- Supabase Settings -----------------------
+# Supabase configuration is loaded from environment variables
+# See .env file for SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+USE_SUPABASE = True  # Set to False to use file-based storage (legacy mode)
