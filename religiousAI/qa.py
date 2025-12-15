@@ -8,6 +8,10 @@ Handles all interactions with the LLM, including:
 - Guided meditations
 - Journal reflections
 - Daily wisdom generation
+
+Supports both:
+- Google Gemini API (for cloud deployment)
+- Ollama (for local development)
 """
 
 from typing import List, Optional, Tuple, Dict
@@ -15,7 +19,6 @@ import random
 
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.llms import Ollama
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from config import (
@@ -24,7 +27,10 @@ from config import (
     OLLAMA_MODEL,
     TRADITIONS,
     ADVISOR_NAME,
-    ENABLE_CRISIS_DETECTION
+    ENABLE_CRISIS_DETECTION,
+    LLM_PROVIDER,
+    GEMINI_API_KEY,
+    GEMINI_MODEL
 )
 from safety import (
     detect_crisis, 
@@ -35,6 +41,20 @@ from safety import (
     should_add_humility_reminder
 )
 from memory import get_context_for_llm
+
+# Import LLM providers based on configuration
+if LLM_PROVIDER == "gemini":
+    import google.generativeai as genai
+    # Configure Gemini
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        _gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+    else:
+        print("WARNING: GEMINI_API_KEY not set. LLM calls will fail.")
+        _gemini_model = None
+else:
+    from langchain_community.llms import Ollama
+    _gemini_model = None
 
 # Import multi-agent system
 try:
@@ -50,18 +70,102 @@ _embeddings_cache = None
 
 def get_optimized_llm(max_tokens: int = 512):
     """
-    Get an optimized Ollama LLM instance for faster responses.
+    Get an LLM instance based on the configured provider.
     
     Args:
         max_tokens: Maximum tokens to generate (default 512 for speed)
+    
+    Returns:
+        For Gemini: Returns None (we use the global _gemini_model directly)
+        For Ollama: Returns an Ollama instance
     """
-    return Ollama(
-        model=OLLAMA_MODEL,
-        temperature=0.7,  # Lower temperature for faster, more focused responses
-        num_predict=max_tokens,  # Limit response length
-        top_p=0.9,  # Nucleus sampling for faster generation
-        repeat_penalty=1.1,  # Prevent repetition
-    )
+    if LLM_PROVIDER == "gemini":
+        # For Gemini, we use the direct API, not LangChain wrapper
+        return None
+    else:
+        # Ollama for local development
+        return Ollama(
+            model=OLLAMA_MODEL,
+            temperature=0.7,
+            num_predict=max_tokens,
+            top_p=0.9,
+            repeat_penalty=1.1,
+        )
+
+
+def generate_with_llm(prompt: str, system_prompt: str = None, max_tokens: int = 2048) -> str:
+    """
+    Generate text using the configured LLM provider.
+    
+    Args:
+        prompt: The user prompt/question
+        system_prompt: Optional system instructions
+        max_tokens: Maximum tokens to generate
+    
+    Returns:
+        Generated text response
+    """
+    if LLM_PROVIDER == "gemini":
+        if not _gemini_model:
+            return "Error: Gemini API key not configured."
+        
+        try:
+            # Combine system prompt and user prompt for Gemini
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+            
+            # Safety settings - allow religious/spiritual content
+            safety_settings = {
+                genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            }
+            
+            # Generate with Gemini
+            response = _gemini_model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=0.7,
+                    top_p=0.9,
+                ),
+                safety_settings=safety_settings
+            )
+            
+            # Extract text from response - handle all cases
+            # Check if we have valid candidates with content
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = candidate.finish_reason if hasattr(candidate, 'finish_reason') else 'N/A'
+                # 1=STOP (good), 2=MAX_TOKENS (truncated), 3=SAFETY, 4=RECITATION, 5=OTHER
+                print(f"[DEBUG] Candidate finish_reason: {finish_reason} (1=OK, 2=TRUNCATED, 3=SAFETY)")
+                
+                if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                        # Combine all parts (sometimes response is split across multiple parts)
+                        full_text = ""
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text'):
+                                full_text += part.text
+                        print(f"[DEBUG] Extracted text length: {len(full_text)} chars, ~{len(full_text.split())} words")
+                        return full_text
+            
+            # If no valid content, return fallback
+            print("[DEBUG] No valid content in response, using fallback")
+            return "I sense your question touches on deep spiritual matters. The wisdom traditions teach us to approach life with patience and compassion. Please share more about what guidance you seek."
+                
+        except Exception as e:
+            print(f"Gemini API error: {e}")
+            return "I'm here to offer spiritual guidance. Could you please rephrase your question?"
+    else:
+        # Ollama
+        llm = get_optimized_llm(max_tokens)
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        return llm.invoke(full_prompt)
 
 
 def get_vectorstore():
@@ -72,7 +176,7 @@ def get_vectorstore():
         if _embeddings_cache is None:
             _embeddings_cache = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
         _vectorstore_cache = Chroma(
-            persist_directory=VECTORSTORE_DIR,
+        persist_directory=VECTORSTORE_DIR,
             embedding_function=_embeddings_cache,
         )
     
@@ -228,11 +332,16 @@ def ask_question(
     # Retrieve relevant passages
     docs = retrieve(question, traditions)
     context = context_to_text(docs)
+    
+    # Debug: show what we retrieved
+    print(f"[DEBUG] Retrieved {len(docs)} scripture passages")
+    print(f"[DEBUG] Context length: {len(context)} chars")
 
     # Get traditions in context
     traditions_in_context = list(set(
         d.metadata.get('tradition', 'Unknown') for d in docs
     ))
+    print(f"[DEBUG] Traditions found: {traditions_in_context}")
     
     system_prompt = get_advisor_system_prompt(traditions_in_context, mode)
     
@@ -305,12 +414,12 @@ Provide guidance that:
 
 Your guidance:"""
 
-    llm = get_optimized_llm(max_tokens=512)
+    # Generate response using configured LLM (Gemini or Ollama)
+    # Increase tokens for fuller responses with scripture citations
+    response = generate_with_llm(user_prompt, system_prompt, max_tokens=2048)
     
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
+    # Debug: print response length
+    print(f"[DEBUG] Response length: {len(response)} chars")
     
     # Add clarifications if needed
     if clarification:
@@ -364,7 +473,7 @@ def ask_question_multi_agent(
     # Retrieve relevant passages
     docs = retrieve(question, traditions)
     context = context_to_text(docs)
-    
+
     # Build user context from memory
     user_context = ""
     if user_memory:
@@ -434,12 +543,7 @@ Please provide a thoughtful comparison that:
 
 Format with clear sections for each tradition, then a "Common Wisdom" section."""
 
-    llm = get_optimized_llm(max_tokens=512)
-    
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
+    response = generate_with_llm(user_prompt, system_prompt, max_tokens=1500)
     
     return response, comparative_docs
 
@@ -492,12 +596,7 @@ Write a 2-3 sentence daily wisdom reflection that:
 
 Keep it concise and memorable."""
 
-    llm = get_optimized_llm(max_tokens=512)
-
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
+    response = generate_with_llm(user_prompt, system_prompt, max_tokens=256)
 
     return response, tradition, scripture
 
@@ -532,13 +631,8 @@ Offer a gentle reflection that:
 
 Keep your tone warm, curious, and supportive."""
 
-    llm = get_optimized_llm(max_tokens=512)
-    
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
-    
+    response = generate_with_llm(user_prompt, system_prompt, max_tokens=1500)
+
     return response
 
 

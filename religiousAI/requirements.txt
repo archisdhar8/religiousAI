@@ -3,6 +3,9 @@ langchain
 langchain-community
 langchain-core
 
+# Google Gemini API
+google-generativeai
+
 # Vector store
 chromadb
 

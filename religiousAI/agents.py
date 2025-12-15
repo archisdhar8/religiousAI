@@ -13,21 +13,74 @@ The agents collaborate behind the scenes to form a unified response.
 """
 
 from typing import List, Optional, Dict, Tuple
-from langchain_community.llms import Ollama
-from langchain_core.messages import SystemMessage, HumanMessage
 
-from config import OLLAMA_MODEL, TRADITIONS
+from config import TRADITIONS, LLM_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, OLLAMA_MODEL
+
+# Import LLM providers based on configuration
+if LLM_PROVIDER == "gemini":
+    import google.generativeai as genai
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        _gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+    else:
+        _gemini_model = None
+else:
+    from langchain_community.llms import Ollama
+    _gemini_model = None
 
 
-def get_llm():
-    """Get an optimized LLM instance for faster responses."""
-    return Ollama(
-        model=OLLAMA_MODEL,
-        temperature=0.7,
-        num_predict=400,  # Shorter responses for agents (they get synthesized anyway)
-        top_p=0.9,
-        repeat_penalty=1.1,
-    )
+def generate_agent_response(prompt: str, system_prompt: str, max_tokens: int = 400) -> str:
+    """
+    Generate a response using the configured LLM.
+    Similar to qa.py's generate_with_llm but optimized for agents.
+    """
+    if LLM_PROVIDER == "gemini":
+        if not _gemini_model:
+            return "Error: Gemini API key not configured."
+        
+        try:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+            
+            # Safety settings - disable blocking for religious content
+            safety_settings = {
+                genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+                genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            }
+            
+            response = _gemini_model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=0.7,
+                    top_p=0.9,
+                ),
+                safety_settings=safety_settings
+            )
+            
+            # Extract text - handle all cases without using response.text
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                        return candidate.content.parts[0].text
+            
+            return "Wisdom guides us forward."
+                
+        except Exception as e:
+            print(f"Gemini API error: {e}")
+            return "Seeking wisdom..."
+    else:
+        llm = Ollama(
+            model=OLLAMA_MODEL,
+            temperature=0.7,
+            num_predict=max_tokens,
+            top_p=0.9,
+            repeat_penalty=1.1,
+        )
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+        return llm.invoke(full_prompt)
 
 
 # =====================================================================
@@ -141,26 +194,19 @@ Create a response that feels like speaking with one deeply wise spiritual guide,
 
 def run_compassion_agent(question: str, context: str = "") -> str:
     """Run the Compassion Agent for emotional grounding."""
-    llm = get_llm()
-    
     prompt = f"""Question from seeker: {question}
 
 {f"Context from their history: {context}" if context else ""}
 
 Provide brief emotional acknowledgment and grounding (2-3 sentences):"""
 
-    response = llm.invoke([
-        SystemMessage(content=COMPASSION_AGENT_PROMPT),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, COMPASSION_AGENT_PROMPT, max_tokens=200)
     
     return response.strip()
 
 
 def run_scripture_agent(question: str, scripture_context: str, traditions: List[str] = None) -> str:
     """Run the Scripture Agent for accurate citations."""
-    llm = get_llm()
-    
     traditions_str = ", ".join(traditions) if traditions else ", ".join(TRADITIONS.keys())
     system_prompt = SCRIPTURE_AGENT_PROMPT.format(traditions=traditions_str)
     
@@ -171,18 +217,13 @@ Relevant scripture passages found:
 
 Select and cite the most relevant passage(s) with exact references:"""
 
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, system_prompt, max_tokens=300)
     
     return response.strip()
 
 
 def run_scholar_agent(question: str, scripture_citation: str) -> str:
     """Run the Scholar Agent for theological interpretation."""
-    llm = get_llm()
-    
     prompt = f"""Question from seeker: {question}
 
 Scripture cited:
@@ -190,18 +231,13 @@ Scripture cited:
 
 Provide theological interpretation and context (2-3 sentences):"""
 
-    response = llm.invoke([
-        SystemMessage(content=SCHOLAR_AGENT_PROMPT),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, SCHOLAR_AGENT_PROMPT, max_tokens=300)
     
     return response.strip()
 
 
 def run_guidance_agent(question: str, all_context: str) -> str:
     """Run the Guidance Agent for practical advice."""
-    llm = get_llm()
-    
     prompt = f"""Question from seeker: {question}
 
 Wisdom shared so far:
@@ -209,10 +245,7 @@ Wisdom shared so far:
 
 Provide 2-3 practical, actionable suggestions:"""
 
-    response = llm.invoke([
-        SystemMessage(content=GUIDANCE_AGENT_PROMPT),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, GUIDANCE_AGENT_PROMPT, max_tokens=300)
     
     return response.strip()
 
@@ -225,8 +258,6 @@ def synthesize_responses(
     guidance: str
 ) -> str:
     """Synthesize all agent responses into one unified response."""
-    llm = get_llm()
-    
     prompt = f"""SEEKER'S QUESTION:
 {question}
 
@@ -245,10 +276,7 @@ GUIDANCE AGENT (practical advice):
 ---
 Now synthesize these into ONE unified, flowing response from a wise spiritual advisor:"""
 
-    response = llm.invoke([
-        SystemMessage(content=SYNTHESIZER_PROMPT),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, SYNTHESIZER_PROMPT, max_tokens=600)
     
     return response.strip()
 
@@ -326,8 +354,6 @@ def compare_religions_on_topic(
         traditions: List of traditions to compare
         scripture_by_tradition: Dict mapping tradition name to retrieved scripture text
     """
-    llm = get_llm()
-    
     system_prompt = """You are a respectful comparative religion scholar.
 
 YOUR ROLE:
@@ -362,10 +388,7 @@ SCRIPTURE PASSAGES:
 
 Provide a respectful comparison showing how each tradition addresses "{topic}":"""
 
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=prompt)
-    ])
+    response = generate_agent_response(prompt, system_prompt, max_tokens=800)
     
     return response.strip()
 

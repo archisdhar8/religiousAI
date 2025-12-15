@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -8,8 +12,16 @@ USER_DATA_DIR = os.path.join(BASE_DIR, "data", "users")  # For conversation memo
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Use llama3 in Ollama
+# ----------------------- LLM Provider Settings -----------------------
+# Set LLM_PROVIDER in .env: "gemini" for cloud deployment, "ollama" for local dev
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+
+# Ollama settings (for local development)
 OLLAMA_MODEL = "llama3"
+
+# Gemini settings (for deployment)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-flash-latest")  # Stable flash model
 
 # ----------------------- Scripture Traditions -----------------------
 TRADITIONS = {
