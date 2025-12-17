@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ChatSummary, deleteChatById, renameChat } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -144,8 +143,8 @@ export function ChatHistory({
 
   return (
     <div className="h-full flex flex-col bg-card/30 border-r border-gold/10 w-64">
-      {/* Header */}
-      <div className="flex items-center justify-between p-3 border-b border-gold/10">
+      {/* Header - Fixed */}
+      <div className="flex items-center justify-between p-3 border-b border-gold/10 shrink-0">
         <Button
           variant="ghost"
           size="icon"
@@ -167,8 +166,8 @@ export function ChatHistory({
         </Button>
       </div>
 
-      {/* Chat List */}
-      <ScrollArea className="flex-1">
+      {/* Chat List - Scrollable inside fixed sidebar */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="p-2 space-y-4">
           {Object.entries(groupedChats).map(([dateLabel, dateChats]) => (
             <div key={dateLabel}>
@@ -219,44 +218,54 @@ export function ChatHistory({
                     ) : (
                       <button
                         onClick={() => onSelectChat(chat.id)}
-                        className="w-full text-left p-2 pr-8"
+                        className="w-full text-left p-2 pr-12 relative"
                       >
-                        <div className="flex items-start gap-2">
-                          <MessageSquare className="h-4 w-4 mt-0.5 shrink-0 text-gold/60" />
+                        <div className="flex items-center gap-2">
+                          <MessageSquare className="h-4 w-4 shrink-0 text-gold/60" />
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium truncate text-foreground/90">
+                            <p className="text-sm font-medium text-foreground/90 line-clamp-1">
                               {chat.title}
                             </p>
-                            {chat.preview && (
-                              <p className="text-xs text-muted-foreground truncate mt-0.5">
-                                {chat.preview}
-                              </p>
-                            )}
                           </div>
                         </div>
                       </button>
                     )}
                     
-                    {/* Actions dropdown */}
+                    {/* Actions dropdown - Always visible */}
                     {editingId !== chat.id && (
-                      <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 z-30 flex items-center">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-7 w-7"
+                              className="h-8 w-8 hover:bg-gold/20 text-foreground/70 hover:text-foreground border-0 shadow-sm"
+                              onClick={(e) => {
+                                e.stopPropagation(); // Prevent chat selection when clicking menu
+                                e.preventDefault();
+                              }}
+                              onMouseDown={(e) => {
+                                e.stopPropagation(); // Prevent chat selection
+                              }}
                             >
-                              <MoreHorizontal className="h-4 w-4" />
+                              <MoreHorizontal className="h-5 w-5" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-36">
-                            <DropdownMenuItem onClick={() => handleStartRename(chat)}>
+                          <DropdownMenuContent align="end" className="w-36 z-50" onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenuItem 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartRename(chat);
+                              }}
+                            >
                               <Pencil className="mr-2 h-4 w-4" />
                               Rename
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              onClick={() => setDeleteId(chat.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteId(chat.id);
+                              }}
                               className="text-red-500 focus:text-red-500"
                             >
                               <Trash2 className="mr-2 h-4 w-4" />
@@ -284,7 +293,7 @@ export function ChatHistory({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>

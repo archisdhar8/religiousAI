@@ -48,6 +48,7 @@ const Index = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -88,6 +89,11 @@ const Index = () => {
   const loadChatMessages = useCallback(async (chatId: string) => {
     try {
       console.log("Loading chat messages for:", chatId);
+      
+      // Clear current messages first to show loading state
+      setMessages([]);
+      setIsTyping(false);
+      
       const chat = await getChatById(chatId);
       console.log("Got chat:", chat);
       
@@ -98,18 +104,70 @@ const Index = () => {
         setSelectedReligion(chat.religion);
       }
       
-      // Convert chat messages to our Message format
-      if (chat.messages && chat.messages.length > 0) {
-        const loadedMessages: Message[] = chat.messages.map((msg, idx) => ({
-          id: `${chatId}-${idx}`,
-          content: msg.content,
-          isUser: msg.role === "user",
-        }));
-        console.log("Setting messages:", loadedMessages);
-        setMessages(loadedMessages);
-      } else {
-        // Empty chat, show greeting
-        console.log("Empty chat, showing greeting");
+        // Convert chat messages to our Message format
+        if (chat.messages && chat.messages.length > 0) {
+          const loadedMessages: Message[] = chat.messages.map((msg, idx) => ({
+            id: `${chatId}-${idx}`,
+            content: msg.content,
+            isUser: msg.role === "user",
+          }));
+          console.log("Setting messages:", loadedMessages);
+          setMessages(loadedMessages);
+          
+          // Scroll to bottom after messages are loaded
+          // Use requestAnimationFrame to ensure DOM is updated
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              scrollRef.current?.scrollIntoView({ behavior: "auto" });
+              // Also try scrolling the scroll area viewport
+              const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+              if (viewport) {
+                viewport.scrollTop = viewport.scrollHeight;
+              }
+            }, 200);
+          });
+        } else {
+          // Empty chat, show greeting
+          console.log("Empty chat, showing greeting");
+          const greetingResponse = await getGreeting();
+          if (greetingResponse.greeting) {
+            setMessages([
+              {
+                id: "welcome",
+                content: greetingResponse.greeting,
+                isUser: false,
+              },
+            ]);
+          } else {
+            setMessages([
+              {
+                id: "welcome",
+                content: "Welcome, seeker. I am here to offer guidance drawn from the sacred wisdom of humanity's great spiritual traditions. Share with me what weighs upon your heart, and together we shall find light for your path.",
+                isUser: false,
+              },
+            ]);
+          }
+        }
+    } catch (error) {
+      console.error("Failed to load chat:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load conversation",
+        variant: "destructive",
+      });
+      // Show greeting on error
+      try {
+        const greetingResponse = await getGreeting();
+        if (greetingResponse.greeting) {
+          setMessages([
+            {
+              id: "welcome",
+              content: greetingResponse.greeting,
+              isUser: false,
+            },
+          ]);
+        }
+      } catch {
         setMessages([
           {
             id: "welcome",
@@ -118,13 +176,6 @@ const Index = () => {
           },
         ]);
       }
-    } catch (error) {
-      console.error("Failed to load chat:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load conversation",
-        variant: "destructive",
-      });
     }
   }, [toast]);
 
@@ -189,14 +240,20 @@ const Index = () => {
   }, [isInitialized, loadChats, loadInitialGreeting]);
 
   useEffect(() => {
-    // Only auto-scroll to bottom if user has sent messages (conversation has started)
-    // Don't scroll on initial load when only welcome message is present
+    // Auto-scroll to bottom when messages change
+    // Only scroll if there are user messages (conversation has started)
     const hasUserMessages = messages.some((msg) => msg.isUser);
-    if (hasUserMessages && scrollRef.current) {
-      // Small delay to ensure DOM is updated
-      setTimeout(() => {
-        scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 100);
+    if (hasUserMessages && messages.length > 0) {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          scrollRef.current?.scrollIntoView({ behavior: "auto" });
+          // Also scroll the scroll area viewport
+          const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+          if (viewport) {
+            viewport.scrollTop = viewport.scrollHeight;
+          }
+        }, 200);
+      });
     }
   }, [messages, isTyping]);
 
@@ -347,10 +404,10 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-divine flex">
+    <div className="h-screen bg-divine flex overflow-hidden">
       <FloatingParticles />
       
-      {/* Chat History Sidebar */}
+      {/* Chat History Sidebar - Fixed */}
       <aside className="relative z-20 h-screen hidden md:block">
         <ChatHistory
           chats={chats}
@@ -364,9 +421,9 @@ const Index = () => {
       </aside>
       
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="relative z-10 border-b border-gold/20 bg-card/50 backdrop-blur-sm">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+        {/* Header - Fixed */}
+        <header className="relative z-10 border-b border-gold/20 bg-card/50 backdrop-blur-sm shrink-0">
           <div className="px-4 py-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 max-w-4xl mx-auto">
               <div className="flex items-center justify-between">
@@ -499,9 +556,9 @@ const Index = () => {
           </div>
         </header>
 
-        {/* Chat Area */}
-        <main className="flex-1 relative z-10 overflow-hidden">
-          <ScrollArea className="h-[calc(100vh-180px)]">
+        {/* Chat Area - Only this scrolls */}
+        <main className="flex-1 relative z-10 overflow-hidden min-h-0">
+          <ScrollArea ref={scrollAreaRef} className="h-full w-full">
             <div className="max-w-4xl mx-auto px-4 py-6">
               <div className="space-y-6">
                 {messages.map((message) => (
@@ -520,8 +577,8 @@ const Index = () => {
           </ScrollArea>
         </main>
 
-        {/* Input Area - Sticky at bottom */}
-        <footer className="sticky bottom-0 z-10 border-t border-gold/20 bg-card/50 backdrop-blur-sm">
+        {/* Input Area - Fixed at bottom */}
+        <footer className="shrink-0 border-t border-gold/20 bg-card/50 backdrop-blur-sm">
           <div className="max-w-4xl mx-auto px-4 py-4">
             {/* Show prompts only when there's only the welcome message (no user messages yet) */}
             <ConversationPrompts

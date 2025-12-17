@@ -14,6 +14,13 @@ from typing import List, Dict, Optional, Tuple
 from config import USER_DATA_DIR, USE_SUPABASE
 from supabase_client import get_supabase_client
 
+# Import LLM for title generation
+try:
+    from qa import generate_with_llm
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+
 
 # =====================================================================
 # USER ID HELPERS
@@ -584,6 +591,80 @@ def get_context_for_llm(memory: Dict) -> str:
 # CHAT MANAGEMENT (Multiple Conversations like ChatGPT)
 # =====================================================================
 
+def generate_chat_title(first_question: str) -> str:
+    """
+    Generate a short, concise title (2-3 words) from the first question.
+    Uses LLM if available, otherwise falls back to smart extraction.
+    """
+    if not first_question or not first_question.strip():
+        return "New Chat"
+    
+    # Try to generate with LLM first
+    if LLM_AVAILABLE:
+        try:
+            prompt = f"""Create a very short title (2-3 words maximum) that summarizes this question:
+
+"{first_question}"
+
+Return only the title, nothing else. Just 2-3 words that capture the main topic."""
+            
+            system_prompt = "You are a helpful assistant that creates very short, concise titles (2-3 words) for conversations."
+            
+            llm_title = generate_with_llm(prompt, system_prompt, max_tokens=20)
+            
+            # Clean up the response
+            llm_title = llm_title.strip()
+            # Remove quotes if present
+            llm_title = llm_title.strip('"\'')
+            # Remove any trailing punctuation
+            llm_title = llm_title.rstrip('.,!?;:')
+            
+            # Count words and validate
+            words = llm_title.split()
+            if len(words) <= 4 and len(llm_title) > 2 and not llm_title.startswith("Error"):
+                # If more than 3 words, take first 3
+                if len(words) > 3:
+                    llm_title = ' '.join(words[:3])
+                return llm_title
+        except Exception as e:
+            print(f"Error generating title with LLM: {e}")
+            # Fall through to fallback
+    
+    # Fallback: Extract key words from question
+    question = first_question.strip()
+    question_lower = question.lower()
+    
+    # Remove common question words and phrases
+    prefixes_to_remove = [
+        "what is", "what are", "what do", "what does", "what did", "what will",
+        "how do", "how does", "how can", "how should", "how did", "how will",
+        "why do", "why does", "why did", "why should", "why is", "why are",
+        "when do", "when does", "when did", "when will", "when is", "when are",
+        "where do", "where does", "where did", "where will", "where is", "where are",
+        "who is", "who are", "who do", "who does", "who did", "who will",
+        "can you", "could you", "would you", "should i", "can i", "could i",
+        "tell me", "explain", "i want", "i need", "i'm", "i am", "i feel", "i think"
+    ]
+    
+    for prefix in prefixes_to_remove:
+        if question_lower.startswith(prefix):
+            question = question[len(prefix):].strip()
+            break
+    
+    # Remove question mark
+    question = question.rstrip('?')
+    
+    # Extract first 2-3 words
+    words = question.split()
+    if len(words) > 3:
+        words = words[:3]
+    
+    # Capitalize first letter of each word
+    title = ' '.join(word.capitalize() if word else '' for word in words if word)
+    
+    return title if title else "New Chat"
+
+
 def create_new_chat(user_id: str, religion: str = None, title: str = None) -> Dict:
     """Create a new chat thread for a user."""
     if not USE_SUPABASE:
@@ -786,7 +867,7 @@ def add_message_to_chat(
         
         # Auto-generate title from first user message
         if chat.get("title", "").startswith("New Chat") and role == "user":
-            new_title = content[:40] + ("..." if len(content) > 40 else "")
+            new_title = generate_chat_title(content)
             supabase.table("chats").update({"title": new_title}).eq("id", chat_id).execute()
             chat["title"] = new_title
         
@@ -1023,8 +1104,8 @@ def _add_message_to_chat_file_based(user_id: str, chat_id: str, role: str, conte
             })
             chat["updated_at"] = datetime.now().isoformat()
             
-            if chat["title"] == "New Conversation" and role == "user":
-                chat["title"] = content[:40] + ("..." if len(content) > 40 else "")
+            if chat["title"] == "New Conversation" or chat["title"].startswith("New Chat"):
+                chat["title"] = generate_chat_title(content)
             
             memory["chats"].remove(chat)
             memory["chats"].insert(0, chat)
