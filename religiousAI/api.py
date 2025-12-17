@@ -6,9 +6,18 @@ Exposes the backend functionality as REST endpoints for the React frontend.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 import uuid
+import logging
+import os
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("DEBUG") else logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 from qa import (
     ask_question,
@@ -98,14 +107,14 @@ app.add_middleware(
 
 # Request/Response Models
 class ChatRequest(BaseModel):
-    message: str
-    religion: Optional[str] = None  # Frontend religion ID
-    session_id: Optional[str] = None
-    chat_id: Optional[str] = None  # Specific chat thread to use
+    message: str = Field(..., min_length=1, max_length=4000, description="User message (max 4000 chars)")
+    religion: Optional[str] = Field(None, max_length=50)
+    session_id: Optional[str] = Field(None, max_length=100)
+    chat_id: Optional[str] = Field(None, max_length=50)
     conversation_history: Optional[List[Dict[str, str]]] = None
-    mode: str = "standard"
-    use_multi_agent: bool = False  # Enable multi-agent system
-    authorization: Optional[str] = None  # Bearer token for authenticated users
+    mode: str = Field("standard", max_length=20)
+    use_multi_agent: bool = False
+    authorization: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -288,7 +297,7 @@ def detect_comparison_request(message: str) -> tuple[bool, Optional[str], Option
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
+    """Basic status endpoint."""
     return {
         "message": "Divine Wisdom Guide API", 
         "status": "running",
@@ -301,6 +310,51 @@ async def root():
             "journal"
         ]
     }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Detailed health check for monitoring/deployment.
+    Tests database and vectorstore connectivity.
+    """
+    from config import USE_SUPABASE, LLM_PROVIDER
+    
+    health = {
+        "status": "healthy",
+        "checks": {
+            "api": True,
+            "database": None,
+            "llm_provider": LLM_PROVIDER,
+            "vectorstore": None
+        }
+    }
+    
+    # Check database
+    if USE_SUPABASE:
+        try:
+            from supabase_client import get_supabase_client
+            client = get_supabase_client()
+            client.table("users").select("id").limit(1).execute()
+            health["checks"]["database"] = True
+        except Exception as e:
+            health["checks"]["database"] = False
+            health["status"] = "degraded"
+            logger.warning(f"Database health check failed: {e}")
+    else:
+        health["checks"]["database"] = "file-based"
+    
+    # Check vectorstore
+    try:
+        from qa import get_vectorstore
+        db = get_vectorstore()
+        health["checks"]["vectorstore"] = db is not None
+    except Exception as e:
+        health["checks"]["vectorstore"] = False
+        health["status"] = "degraded"
+        logger.warning(f"Vectorstore health check failed: {e}")
+    
+    return health
 
 
 @app.get("/api/traditions", response_model=TraditionsResponse)

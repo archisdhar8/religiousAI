@@ -16,6 +16,12 @@ Supports both:
 
 from typing import List, Optional, Tuple, Dict
 import random
+import logging
+import os
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG if os.getenv("DEBUG") else logging.INFO)
 
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -50,7 +56,7 @@ if LLM_PROVIDER == "gemini":
         genai.configure(api_key=GEMINI_API_KEY)
         _gemini_model = genai.GenerativeModel(GEMINI_MODEL)
     else:
-        print("WARNING: GEMINI_API_KEY not set. LLM calls will fail.")
+        logger.warning("GEMINI_API_KEY not set. LLM calls will fail.")
         _gemini_model = None
 else:
     from langchain_community.llms import Ollama
@@ -140,7 +146,7 @@ def generate_with_llm(prompt: str, system_prompt: str = None, max_tokens: int = 
                 candidate = response.candidates[0]
                 finish_reason = candidate.finish_reason if hasattr(candidate, 'finish_reason') else 'N/A'
                 # 1=STOP (good), 2=MAX_TOKENS (truncated), 3=SAFETY, 4=RECITATION, 5=OTHER
-                print(f"[DEBUG] Candidate finish_reason: {finish_reason} (1=OK, 2=TRUNCATED, 3=SAFETY)")
+                logger.debug(f"Candidate finish_reason: {finish_reason} (1=OK, 2=TRUNCATED, 3=SAFETY)")
                 
                 if hasattr(candidate, 'content') and candidate.content:
                     if hasattr(candidate.content, 'parts') and candidate.content.parts:
@@ -149,15 +155,15 @@ def generate_with_llm(prompt: str, system_prompt: str = None, max_tokens: int = 
                         for part in candidate.content.parts:
                             if hasattr(part, 'text'):
                                 full_text += part.text
-                        print(f"[DEBUG] Extracted text length: {len(full_text)} chars, ~{len(full_text.split())} words")
+                        logger.debug(f"Extracted text: {len(full_text)} chars, ~{len(full_text.split())} words")
                         return full_text
             
             # If no valid content, return fallback
-            print("[DEBUG] No valid content in response, using fallback")
+            logger.warning("No valid content in Gemini response, using fallback")
             return "I sense your question touches on deep spiritual matters. The wisdom traditions teach us to approach life with patience and compassion. Please share more about what guidance you seek."
                 
         except Exception as e:
-            print(f"Gemini API error: {e}")
+            logger.error(f"Gemini API error: {e}")
             return "I'm here to offer spiritual guidance. Could you please rephrase your question?"
     else:
         # Ollama
@@ -332,16 +338,16 @@ def ask_question(
     # Retrieve relevant passages
     docs = retrieve(question, traditions)
     context = context_to_text(docs)
-    
-    # Debug: show what we retrieved
-    print(f"[DEBUG] Retrieved {len(docs)} scripture passages")
-    print(f"[DEBUG] Context length: {len(context)} chars")
+
+    # Log retrieval info
+    logger.debug(f"Retrieved {len(docs)} scripture passages")
+    logger.debug(f"Context length: {len(context)} chars")
 
     # Get traditions in context
     traditions_in_context = list(set(
         d.metadata.get('tradition', 'Unknown') for d in docs
     ))
-    print(f"[DEBUG] Traditions found: {traditions_in_context}")
+    logger.debug(f"Traditions found: {traditions_in_context}")
     
     system_prompt = get_advisor_system_prompt(traditions_in_context, mode)
     
@@ -418,8 +424,7 @@ Your guidance:"""
     # Increase tokens for fuller responses with scripture citations
     response = generate_with_llm(user_prompt, system_prompt, max_tokens=2048)
     
-    # Debug: print response length
-    print(f"[DEBUG] Response length: {len(response)} chars")
+    logger.debug(f"Response length: {len(response)} chars")
     
     # Add clarifications if needed
     if clarification:
